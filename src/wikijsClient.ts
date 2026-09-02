@@ -353,10 +353,13 @@ export async function updatePage(
     url,
     token,
     UPDATE_MUTATION,
+    // `id` last: callers pass a PageMeta whose own `id` field (often undefined
+    // on a page being adopted by path) would otherwise clobber the real id and
+    // send `$id: null` — Wiki.js then rejects the whole mutation.
     {
-      id,
       ...meta,
       content,
+      id,
     }
   );
   const result = data.pages.update;

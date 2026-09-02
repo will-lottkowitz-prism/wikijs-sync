@@ -1,10 +1,12 @@
 # Changelog
 
-## 0.8.2 — 2026-09-02
+## 0.8.3 — 2026-09-03
 
-- First public release: moved to its own repository
-  ([will-lottkowitz-prism/wikijs-sync](https://github.com/will-lottkowitz-prism/wikijs-sync))
-  and published to the VS Code Marketplace. No functional change from 0.8.1.
+- First public release. Also fixes a sync failure for a page that exists on the
+  server but has no `id` in the local file (`Variable "$id" of required type
+  "Int!" was not provided`): when adopting the server id to update in place, the
+  `PageMeta`'s own undefined `id` clobbered the real id in the GraphQL
+  variables. The id is now applied last.
 
 ## 0.8.1 — 2026-09-02
 
