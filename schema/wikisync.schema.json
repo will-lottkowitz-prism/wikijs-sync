@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Wiki.js Sync folder config (.wikisync.json)",
+  "description": "Maps the folder this file lives in to a Wiki.js path and controls which files sync. Drop it in (say) a project's docs/ folder.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Wiki.js base URL for this folder. Overrides the wikijsSync.url setting. e.g. http://localhost:3000"
+    },
+    "token": {
+      "type": "string",
+      "description": "Wiki.js API token for this folder. Overrides SecretStorage / the wikijsSync.token setting. If you set this, add .wikisync.json to your .gitignore."
+    },
+    "wikiPath": {
+      "type": "string",
+      "description": "The Wiki.js path this folder maps to. A file at <thisFolder>/guide/intro.md becomes wiki page <wikiPath>/guide/intro. Omit or \"\" to map the folder to the wiki root.",
+      "default": ""
+    },
+    "assets": {
+      "type": "boolean",
+      "description": "How non-.md files under this folder are treated. true (default): uploaded as Wiki.js assets, mirroring their path. false: ignored - only .md files sync.",
+      "default": true
+    },
+    "include": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Whitelist. Only files matching one of these gitignore-style globs sync. e.g. [\"**/*.md\"] to sync Markdown only. Mutually exclusive with the usual behavior - if set, everything not listed is skipped.",
+      "examples": [["**/*.md"], ["docs/**", "reference/**/*.md"]]
+    },
+    "exclude": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ignorelist. Files matching one of these gitignore-style globs never sync. Replaces the wikijsSync.exclude setting for this folder.",
+      "examples": [["drafts/**", "*.tmp"]]
+    }
+  }
+}

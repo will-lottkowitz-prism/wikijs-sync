@@ -1,0 +1,13 @@
+node_modules/
+out/
+dist/
+.vscode-test/
+*.vsix
+*.tsbuildinfo
+.eslintcache
+coverage/
+.DS_Store
+
+# CI-only build products
+latest.json
+.ci/RELEASE_NOTES.md

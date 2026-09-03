@@ -1,0 +1,269 @@
+{
+  "name": "wikijs-sync",
+  "displayName": "Wiki.js Sync",
+  "description": "Download and upload Wiki.js pages as local Markdown files, SFTP-style, with an upload-on-save option.",
+  "version": "0.9.0",
+  "publisher": "xQx",
+  "license": "MIT",
+  "author": {
+    "name": "Will Lotto",
+    "email": "will.lotto@gmail.com",
+    "url": "https://github.com/will-lottkowitz-prism"
+  },
+  "homepage": "https://github.com/will-lottkowitz-prism/wikijs-sync#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/will-lottkowitz-prism/wikijs-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/will-lottkowitz-prism/wikijs-sync/issues"
+  },
+  "keywords": [
+    "wiki.js",
+    "wikijs",
+    "wiki",
+    "markdown",
+    "sync",
+    "documentation"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/.wikisync.json",
+    "onLanguage:markdown",
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Wiki.js Sync",
+      "properties": {
+        "wikijsSync.url": {
+          "type": "string",
+          "default": "",
+          "order": 1,
+          "markdownDescription": "Default Wiki.js base URL, e.g. `http://localhost:3000`. A `.wikisync.json` file can override this per folder with its own `\"url\"`."
+        },
+        "wikijsSync.token": {
+          "type": "string",
+          "default": "",
+          "order": 2,
+          "markdownDescription": "Default Wiki.js API token (Administration -> API Access). \n\nToken resolution order: `\"token\"` in a `.wikisync.json` -> the token saved by **Wiki.js Sync: Set API Token** (SecretStorage, recommended - not synced or written to disk) -> this setting. Prefer the command or a `.wikisync.json` for anything shared."
+        },
+        "wikijsSync.contentDir": {
+          "type": "string",
+          "default": "content",
+          "order": 3,
+          "markdownDescription": "**Legacy / fallback.** Folder that mirrors the whole wiki's page tree, used only when no `.wikisync.json` is found walking up from the file or folder you act on. Relative paths resolve against the workspace root. New setups should use `.wikisync.json` files instead."
+        },
+        "wikijsSync.uploadOnSave": {
+          "type": "boolean",
+          "default": false,
+          "order": 4,
+          "markdownDescription": "Automatically upload a page to Wiki.js whenever you save its local Markdown file (if the file is inside a synced folder and passes its include/exclude rules)."
+        },
+        "wikijsSync.syncNonMarkdownAsAssets": {
+          "type": "boolean",
+          "default": true,
+          "order": 5,
+          "markdownDescription": "Default for a `.wikisync.json`'s `\"assets\"` field. `true`: non-`.md` files under a synced folder are uploaded as Wiki.js assets, mirroring their path. `false`: only `.md` files sync and everything else is ignored. Override per folder with `\"assets\"` in the `.wikisync.json`."
+        },
+        "wikijsSync.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/.*",
+            "**/node_modules/**"
+          ],
+          "order": 6,
+          "markdownDescription": "Default ignore globs applied to every synced folder that doesn't set its own `\"exclude\"`. A `.wikisync.json` can replace this list (with `\"exclude\"`) or restrict to a whitelist (with `\"include\"`)."
+        },
+        "wikijsSync.autoUpdate": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "prompt",
+            "off"
+          ],
+          "default": "auto",
+          "order": 20,
+          "markdownDescription": "How to handle a newer build found on an `#wikijsSync.updateFeeds#`. `auto`: download, install and offer a reload. `prompt`: ask first. `off`: only the **Wiki.js Sync: Check for Updates** command checks. Marketplace installs update themselves and ignore this."
+        },
+        "wikijsSync.updateFeeds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "https://github.com/will-lottkowitz-prism/wikijs-sync/releases/latest/download/latest.json"
+          ],
+          "order": 21,
+          "markdownDescription": "Locations of a `latest.json` release manifest, tried in order (first hit wins). Each entry is an `http(s)` URL or a local/synced folder path. Leave empty on a Marketplace install."
+        },
+        "wikijsSync.updateCheckIntervalHours": {
+          "type": "number",
+          "default": 6,
+          "order": 22,
+          "markdownDescription": "Minimum hours between automatic update checks. `0` checks on every activation. The **Check for Updates** command ignores this."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "wikijsSync.checkForUpdates",
+        "title": "Wiki.js Sync: Check for Updates"
+      },
+      {
+        "command": "wikijsSync.setToken",
+        "title": "Wiki.js Sync: Set API Token"
+      },
+      {
+        "command": "wikijsSync.initConfig",
+        "title": "Wiki.js Sync: Add .wikisync.json to This Folder"
+      },
+      {
+        "command": "wikijsSync.downloadAll",
+        "title": "Wiki.js Sync: Download All Pages"
+      },
+      {
+        "command": "wikijsSync.pickAndDownload",
+        "title": "Wiki.js Sync: Download Page..."
+      },
+      {
+        "command": "wikijsSync.uploadFile",
+        "title": "Wiki.js Sync: Upload This Page"
+      },
+      {
+        "command": "wikijsSync.downloadFile",
+        "title": "Wiki.js Sync: Download Latest (Overwrite Local)"
+      },
+      {
+        "command": "wikijsSync.uploadAll",
+        "title": "Wiki.js Sync: Upload All Pages"
+      },
+      {
+        "command": "wikijsSync.syncFolder",
+        "title": "Wiki.js Sync: Sync Folder with Wiki (Two-Way)"
+      },
+      {
+        "command": "wikijsSync.uploadFolder",
+        "title": "Wiki.js Sync: Upload Folder (Push Subtree)"
+      },
+      {
+        "command": "wikijsSync.downloadFolder",
+        "title": "Wiki.js Sync: Download Folder (Pull Subtree)"
+      },
+      {
+        "command": "wikijsSync.uploadAsset",
+        "title": "Wiki.js Sync: Upload Asset"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "wikijsSync.uploadFile",
+          "when": "resourceExtname == .md",
+          "group": "wikijsSync@1"
+        },
+        {
+          "command": "wikijsSync.downloadFile",
+          "when": "resourceExtname == .md",
+          "group": "wikijsSync@2"
+        },
+        {
+          "command": "wikijsSync.downloadAll",
+          "when": "explorerResourceIsFolder && resourcePath in wikijsSync.contentDirs",
+          "group": "wikijsSync@3"
+        },
+        {
+          "command": "wikijsSync.uploadAll",
+          "when": "explorerResourceIsFolder && resourcePath in wikijsSync.contentDirs",
+          "group": "wikijsSync@4"
+        },
+        {
+          "command": "wikijsSync.downloadFolder",
+          "when": "explorerResourceIsFolder && !(resourcePath in wikijsSync.contentDirs)",
+          "group": "wikijsSync@5"
+        },
+        {
+          "command": "wikijsSync.uploadFolder",
+          "when": "explorerResourceIsFolder && !(resourcePath in wikijsSync.contentDirs)",
+          "group": "wikijsSync@6"
+        },
+        {
+          "command": "wikijsSync.syncFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "wikijsSync@7"
+        },
+        {
+          "command": "wikijsSync.initConfig",
+          "when": "explorerResourceIsFolder",
+          "group": "wikijsSync@9"
+        },
+        {
+          "command": "wikijsSync.uploadAsset",
+          "when": "!explorerResourceIsFolder && resourceExtname != .md",
+          "group": "wikijsSync@8"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "wikijsSync.uploadFile",
+          "when": "resourceExtname == .md",
+          "group": "wikijsSync@1"
+        },
+        {
+          "command": "wikijsSync.downloadFile",
+          "when": "resourceExtname == .md",
+          "group": "wikijsSync@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "wikijsSync.uploadFile",
+          "when": "resourceExtname == .md"
+        },
+        {
+          "command": "wikijsSync.downloadFile",
+          "when": "resourceExtname == .md"
+        }
+      ]
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": ".wikisync.json",
+        "url": "./schema/wikisync.schema.json"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "npm run check-types && node esbuild.mjs",
+    "build": "npm run compile",
+    "check-types": "tsc -p ./ --noEmit",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint \"src/**/*.ts\"",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.13.1",
+    "@typescript-eslint/parser": "^7.13.1",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.23.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5",
+    "vitest": "^2.1.9"
+  }
+}

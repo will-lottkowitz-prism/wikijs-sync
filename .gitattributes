@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.vsix binary
+*.png binary
+*.jpg binary
+*.gif binary
+*-lock.json linguist-generated=true -diff
