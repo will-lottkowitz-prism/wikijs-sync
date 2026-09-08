@@ -2,7 +2,7 @@
   "name": "wikijs-sync",
   "displayName": "Wiki.js Sync",
   "description": "Download and upload Wiki.js pages as local Markdown files, SFTP-style, with an upload-on-save option.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publisher": "xQx",
   "license": "MIT",
   "author": {
@@ -84,6 +84,17 @@
           "order": 6,
           "markdownDescription": "Default ignore globs applied to every synced folder that doesn't set its own `\"exclude\"`. A `.wikisync.json` can replace this list (with `\"exclude\"`) or restrict to a whitelist (with `\"include\"`)."
         },
+        "wikijsSync.autoRenameIllegalPaths": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "auto",
+            "off"
+          ],
+          "default": "prompt",
+          "order": 7,
+          "markdownDescription": "A page's Wiki.js path is derived from the file's location, and Wiki.js rejects a path containing `.`, a space, `\\` or `//`. When a local file's location would produce an illegal path: `prompt` asks whether to rename the file to a legal form (with a \"…All\" button for bulk runs); `auto` renames silently and logs it; `off` skips the file and reports it. Illegal characters become `-`; case is preserved."
+        },
         "wikijsSync.autoUpdate": {
           "type": "string",
           "enum": [
@@ -160,6 +171,10 @@
         "title": "Wiki.js Sync: Download Folder (Pull Subtree)"
       },
       {
+        "command": "wikijsSync.normalizeFolder",
+        "title": "Wiki.js Sync: Normalize Front Matter (Folder)"
+      },
+      {
         "command": "wikijsSync.uploadAsset",
         "title": "Wiki.js Sync: Upload Asset"
       }
@@ -200,6 +215,11 @@
           "command": "wikijsSync.syncFolder",
           "when": "explorerResourceIsFolder",
           "group": "wikijsSync@7"
+        },
+        {
+          "command": "wikijsSync.normalizeFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "wikijsSync@10"
         },
         {
           "command": "wikijsSync.initConfig",

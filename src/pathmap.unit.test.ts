@@ -7,6 +7,7 @@ import {
   matchGlob,
   normalizeWikiPath,
   pagePathForFile,
+  sanitizeWikiPath,
 } from './pathmap';
 
 const posix = (p: string) => p.replace(/\\/g, '/');
@@ -24,6 +25,67 @@ describe('pagePathForFile', () => {
   });
   it('legacy (empty wikiPath) maps to a bare relative path', () => {
     expect(pagePathForFile(legacy, '/w/content/Blog/hi.md')).toBe('Blog/hi');
+  });
+  it('leaves an already-legal mixed-case path untouched', () => {
+    expect(
+      pagePathForFile(legacy, '/w/content/Servers/District/router.md')
+    ).toBe('Servers/District/router');
+  });
+  it('sanitizes dots and spaces in the file name', () => {
+    expect(pagePathForFile(ctx, '/w/docs/Node.js Notes.md')).toBe(
+      'Products/x/Node-js-Notes'
+    );
+  });
+  it('sanitizes an illegal folder segment', () => {
+    expect(pagePathForFile(legacy, '/w/content/deep/v1.2/thing.md')).toBe(
+      'deep/v1-2/thing'
+    );
+  });
+  it('does not reserved-word-guard a non-first segment', () => {
+    expect(pagePathForFile(ctx, '/w/docs/js/api.md')).toBe('Products/x/js/api');
+  });
+});
+
+describe('sanitizeWikiPath', () => {
+  const cases: Array<[string, string]> = [
+    ['Servers/District/router', 'Servers/District/router'],
+    ['Node.js Notes', 'Node-js-Notes'],
+    ['abc//b', 'abc/b'],
+    ['weird\\name', 'weird-name'],
+    ['dots...everywhere', 'dots-everywhere'],
+    ['  spaced  ', 'spaced'], // spaces -> '-', then leading/trailing '-' trimmed
+    ['trailing-', 'trailing'],
+    ['café/über', 'café/über'], // accented letters kept
+  ];
+  it.each(cases)('%s -> %s', (input, expected) => {
+    expect(sanitizeWikiPath(input)).toBe(expected);
+  });
+
+  it('prefixes a reserved / locale / 1-char first segment with _', () => {
+    expect(sanitizeWikiPath('js/api')).toBe('_js/api');
+    expect(sanitizeWikiPath('en/intro')).toBe('_en/intro');
+    expect(sanitizeWikiPath('x/y')).toBe('_x/y');
+  });
+
+  it('is idempotent', () => {
+    for (const [input] of cases) {
+      expect(sanitizeWikiPath(sanitizeWikiPath(input))).toBe(
+        sanitizeWikiPath(input)
+      );
+    }
+    expect(sanitizeWikiPath(sanitizeWikiPath('js/api'))).toBe('_js/api');
+  });
+
+  it('produces a path Wiki.js accepts (no ., space, \\ or //)', () => {
+    for (const messy of [
+      'a.b.c/d e/f\\g',
+      'v1.2.3/notes',
+      'My Docs//Sub Section',
+    ]) {
+      const out = sanitizeWikiPath(messy);
+      expect(out).not.toMatch(/[.\s\\]/);
+      expect(out).not.toContain('//');
+    }
   });
 });
 

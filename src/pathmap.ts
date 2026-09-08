@@ -23,9 +23,78 @@ const toPosix = (p: string): string => p.split(path.sep).join('/');
 export const normalizeWikiPath = (p: string | undefined): string =>
   (p ?? '').trim().replace(/^\/+|\/+$/g, '');
 
+// Wiki.js rejects a page path outright (server/models/pages.js createPage /
+// movePage) if any segment contains `.`, a space, `\` or `//`; parsePath also
+// strips control chars and `" | < > : * ?`. And the *first* segment can't be a
+// single character, a locale code (`xx` / `xx-XX`), or one of a handful of
+// reserved words. `sanitizeWikiPath` maps any local file/folder name to a path
+// Wiki.js will accept, so callers never have to think about it.
+//
+// Per-segment allow-list: Unicode letters/digits (Wiki.js keeps accented
+// characters — parsePath only strips \x80-\x9f), plus `_ ~ -`. Everything else
+// — dots, spaces, punctuation, control characters — becomes `-`.
+const UNSAFE_IN_SEGMENT = /[^\p{L}\p{N}_~-]+/gu;
+const LOCALE_RE = /^[A-Za-z]{2}(-[A-Za-z]{2})?$/;
+// From Wiki.js: client/components/common/page-selector.vue + data.reservedPaths.
+const RESERVED_FIRST = new Set([
+  'login',
+  'logout',
+  'register',
+  'verify',
+  'favicons',
+  'fonts',
+  'img',
+  'js',
+  'svg',
+  'admin',
+  'api',
+  'assets',
+  'graphql',
+]);
+
+const sanitizeSegment = (seg: string): string => {
+  const s = seg
+    .replace(UNSAFE_IN_SEGMENT, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s || '-';
+};
+
+/** Per-segment character sanitization; `//` collapses. No first-segment guard. */
+const sanitizeSegments = (rawPath: string): string =>
+  rawPath.split('/').filter(Boolean).map(sanitizeSegment).join('/');
+
+// Wiki.js rejects a page whose *first* path segment is a single character, a
+// locale code, or a reserved word — prefix it with `_` to get clear of that.
+const guardFirstSegment = (p: string): string => {
+  if (!p) return p;
+  const segments = p.split('/');
+  const first = segments[0];
+  if (
+    first.length <= 1 ||
+    LOCALE_RE.test(first) ||
+    RESERVED_FIRST.has(first.toLowerCase())
+  ) {
+    segments[0] = `_${first}`;
+  }
+  return segments.join('/');
+};
+
+/**
+ * Map any `/`-joined path to a Wiki.js-legal page path: illegal characters
+ * (`.`, space, `\`, control chars, …) become `-`, `//` collapses, and a first
+ * segment Wiki.js would reject (1 char / locale code / reserved word) is
+ * prefixed with `_`. Idempotent: sanitizing an already-legal path is a no-op.
+ */
+export const sanitizeWikiPath = (rawPath: string): string =>
+  guardFirstSegment(sanitizeSegments(rawPath));
+
 /**
  * Wiki page path for a local `.md` file inside `ctx`. A top-level `index.md`
- * maps to the context's `wikiPath` itself (the "section landing page").
+ * maps to the context's `wikiPath` itself (the "section landing page"). The
+ * portion derived from the file's location is sanitized to a Wiki.js-legal form;
+ * `ctx.wikiPath` is author-controlled and prepended as given (only the combined
+ * first segment gets the reserved-word guard).
  */
 export const pagePathForFile = (ctx: PathContext, filePath: string): string => {
   const relPosix = toPosix(
@@ -34,7 +103,10 @@ export const pagePathForFile = (ctx: PathContext, filePath: string): string => {
   if (relPosix === 'index' && ctx.wikiPath) {
     return ctx.wikiPath;
   }
-  return [ctx.wikiPath, relPosix].filter(Boolean).join('/');
+  const joined = [ctx.wikiPath, sanitizeSegments(relPosix)]
+    .filter(Boolean)
+    .join('/');
+  return guardFirstSegment(joined);
 };
 
 /**

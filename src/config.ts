@@ -39,6 +39,8 @@ export interface WikiSyncFile {
   exclude?: string[];
 }
 
+export type AutoRenameMode = 'prompt' | 'auto' | 'off';
+
 export interface WikiSyncSettings {
   url: string;
   contentDir: string;
@@ -46,6 +48,7 @@ export interface WikiSyncSettings {
   tokenSetting: string;
   defaultAssets: boolean;
   defaultExclude: string[];
+  autoRenameIllegalPaths: AutoRenameMode;
 }
 
 export interface SyncContext {
@@ -79,6 +82,10 @@ export function getSettings(): WikiSyncSettings {
       '**/.*',
       '**/node_modules/**',
     ]),
+    autoRenameIllegalPaths: cfg.get<AutoRenameMode>(
+      'autoRenameIllegalPaths',
+      'prompt'
+    ),
   };
 }
 
@@ -239,4 +246,5 @@ export {
   fileForPagePath,
   fileMatchesContext,
   pagePathForFile,
+  sanitizeWikiPath,
 } from './pathmap';

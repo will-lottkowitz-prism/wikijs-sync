@@ -15,13 +15,16 @@ import {
   uploadAsset,
 } from './wikijsClient';
 import {
+  needsCanonicalRewrite,
   pageDigest,
   parsePageFile,
   parsePageFileLoose,
   sameInstant,
+  serializePageFile,
   serializeSynced,
 } from './pageFile';
 import {
+  AutoRenameMode,
   CONFIG_FILENAME,
   SyncContext,
   assetDirForFile,
@@ -154,6 +157,10 @@ export function registerCommands(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand(
       'wikijsSync.downloadFolder',
       (uri?: vscode.Uri) => guarded(() => downloadFolder(context, out, uri))
+    ),
+    vscode.commands.registerCommand(
+      'wikijsSync.normalizeFolder',
+      (uri?: vscode.Uri) => guarded(() => normalizeFolder(out, uri))
     ),
     vscode.workspace.onDidSaveTextDocument((doc) => onSave(context, out, doc)),
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -667,6 +674,8 @@ interface Stats {
   uploaded: number;
   downloaded: number;
   skipped: number;
+  /** Unchanged files whose front matter was rewritten to canonical form. */
+  tidied: number;
   conflicts: number;
   failed: number;
   assetsUploaded: number;
@@ -677,6 +686,7 @@ const newStats = (): Stats => ({
   uploaded: 0,
   downloaded: 0,
   skipped: 0,
+  tidied: 0,
   conflicts: 0,
   failed: 0,
   assetsUploaded: 0,
@@ -689,6 +699,7 @@ function finish(out: vscode.OutputChannel, lead: string, s: Stats) {
     `${lead}` +
     (s.downloaded ? `, ${s.downloaded} downloaded` : '') +
     (s.skipped ? `, ${s.skipped} unchanged` : '') +
+    (s.tidied ? `, ${s.tidied} tidied` : '') +
     (s.conflicts ? `, ${s.conflicts} conflict(s) left unresolved` : '') +
     `, ${s.assetsUploaded} asset(s) uploaded` +
     (s.assetsSkipped ? `, ${s.assetsSkipped} already present` : '') +
@@ -719,16 +730,19 @@ async function runUpload(
 ) {
   const total = files.length + assetFiles.length || 1;
   const moveResolver = new MoveResolver(true);
+  const renameResolver = new RenameResolver(true);
   for (const filePath of files) {
     const relFilePath = path.relative(ctx.root, filePath);
     progress.report({ message: relFilePath, increment: 100 / total });
     try {
-      await syncUpload(context, out, ctx, filePath, {
+      const pushed = await syncUpload(context, out, ctx, filePath, {
         silent: true,
         skipConflictPrompt,
         moveResolver,
+        renameResolver,
       });
-      stats.uploaded++;
+      if (pushed) stats.uploaded++;
+      else stats.skipped++;
     } catch (err: any) {
       stats.failed++;
       out.appendLine(`FAILED ${relFilePath}: ${err?.message ?? err}`);
@@ -888,6 +902,8 @@ async function syncFolder(
   const matchedRemotePaths = new Set<string>();
   const matchedRemoteIds = new Set<number>();
   const moveResolver = new MoveResolver(true);
+  const renameResolver = new RenameResolver(true);
+  const renameMode = getSettings().autoRenameIllegalPaths;
 
   const stats = newStats();
   out.appendLine(
@@ -901,12 +917,25 @@ async function syncFolder(
       cancellable: false,
     },
     async (progress) => {
-      for (const filePath of eligible) {
-        const relFilePath = path.relative(folderPath, filePath);
+      for (const originalPath of eligible) {
         progress.report({
-          message: relFilePath,
+          message: path.relative(folderPath, originalPath),
           increment: 100 / (eligible.length || 1),
         });
+
+        const legal = await ensureLegalLocation(
+          ctx,
+          originalPath,
+          out,
+          renameMode,
+          renameResolver
+        );
+        if (legal === undefined) {
+          stats.skipped++;
+          continue;
+        }
+        const filePath = legal;
+        const relFilePath = path.relative(folderPath, filePath);
 
         const text = await fs.readFile(filePath, 'utf8');
         const { meta, content, hadFrontMatter } = parsePageFileLoose(
@@ -928,6 +957,7 @@ async function syncFolder(
           syncUpload(context, out, ctx, filePath, {
             silent: true,
             skipConflictPrompt: true,
+            skipRenameCheck: true,
             ...extra,
           });
         const pullRemote = async (id: number, note: string) => {
@@ -998,8 +1028,24 @@ async function syncFolder(
           const remoteChanged = !sameInstant(meta.updatedAt, remote.updatedAt);
 
           if (!localChanged && !remoteChanged) {
-            stats.skipped++;
-            out.appendLine(`sync: ${relFilePath} unchanged; skipped`);
+            // Nothing to sync, but an older version may have left a `path:` line
+            // (or other non-canonical front matter). Tidy it in place — no
+            // network, no history bump (pageDigest ignores everything this
+            // rewrites, so syncHash still matches next run).
+            if (hadFrontMatter && needsCanonicalRewrite(text, meta, content)) {
+              await fs.writeFile(
+                filePath,
+                serializePageFile(meta, content),
+                'utf8'
+              );
+              stats.tidied++;
+              out.appendLine(
+                `sync: ${relFilePath} unchanged; tidied front matter`
+              );
+            } else {
+              stats.skipped++;
+              out.appendLine(`sync: ${relFilePath} unchanged; skipped`);
+            }
             continue;
           }
 
@@ -1099,6 +1145,54 @@ async function syncFolder(
   );
 }
 
+// -- normalize front matter (local only, no network) --------------------
+
+// Rewrite every Markdown file under a folder so its front-matter block is the
+// canonical serialization of what it parses to — drops a stale `path:` line left
+// by an older version, drops unknown keys, fixes key order and stray blank
+// lines. The page body is left byte-for-byte. Touches nothing on the wiki;
+// needs no token or URL.
+async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
+  out.show(true);
+  const folderPath = uri?.fsPath;
+  if (!folderPath) {
+    throw new Error(
+      'Right-click a folder in the Explorer to normalize its front matter.'
+    );
+  }
+
+  const files = await findMarkdownFiles(folderPath);
+  out.appendLine(`normalize: "${folderPath}" — ${files.length} file(s)`);
+  let tidied = 0;
+  let clean = 0;
+  let skipped = 0;
+  for (const filePath of files) {
+    const rel = path.relative(folderPath, filePath);
+    try {
+      const text = await fs.readFile(filePath, 'utf8');
+      const { meta, content } = parsePageFile(text); // throws if no front matter
+      if (needsCanonicalRewrite(text, meta, content)) {
+        await fs.writeFile(filePath, serializePageFile(meta, content), 'utf8');
+        tidied++;
+        out.appendLine(`normalize: rewrote ${rel}`);
+      } else {
+        clean++;
+      }
+    } catch (err: any) {
+      skipped++;
+      out.appendLine(`normalize: skipped ${rel} (${err?.message ?? err})`);
+    }
+  }
+
+  const summary =
+    `Wiki.js Sync: normalized "${folderPath}" — ${tidied} rewritten, ` +
+    `${clean} already canonical` +
+    (skipped ? `, ${skipped} skipped (no front matter)` : '') +
+    '.';
+  out.appendLine(summary);
+  vscode.window.showInformationMessage(summary);
+}
+
 // -- upload-on-save --------------------------------------------------------
 
 async function onSave(
@@ -1119,9 +1213,9 @@ async function onSave(
   if (rel.startsWith('..') || path.isAbsolute(rel)) return; // outside this context
   if (!fileMatchesContext(ctx, doc.fileName)) return;
 
-  await guarded(() =>
-    syncUpload(context, out, ctx, doc.fileName, { silent: true })
-  );
+  await guarded(async () => {
+    await syncUpload(context, out, ctx, doc.fileName, { silent: true });
+  });
 }
 
 // -- move / copy resolution ----------------------------------------------
@@ -1175,6 +1269,101 @@ class MoveResolver {
   }
 }
 
+// -- illegal-path rename resolution -------------------------------------
+
+// Wiki.js rejects a page path containing `.`, a space, `\` or `//`, so a local
+// file whose location would produce one has to be renamed before it can sync.
+// Asks once per file; a reorg can answer for everything with "…All".
+type RenameChoice = 'rename' | 'skip';
+
+class RenameResolver {
+  private sticky?: RenameChoice;
+
+  /** `batch` enables the "apply to all" buttons (pointless for a single file). */
+  constructor(private readonly batch = false) {}
+
+  async resolve(relFrom: string, relTo: string): Promise<RenameChoice> {
+    if (this.sticky) return this.sticky;
+
+    const buttons = this.batch
+      ? ['Rename', 'Rename All', 'Skip', 'Skip All']
+      : ['Rename', 'Skip'];
+    const choice = await vscode.window.showWarningMessage(
+      `Wiki.js Sync: "${relFrom}" maps to a Wiki.js page path that Wiki.js won't ` +
+        `accept (paths can't contain ".", spaces, "\\" or "//"). Rename the local ` +
+        `file to "${relTo}"?`,
+      { modal: true },
+      ...buttons
+    );
+    switch (choice) {
+      case 'Rename':
+        return 'rename';
+      case 'Rename All':
+        this.sticky = 'rename';
+        return 'rename';
+      case 'Skip All':
+        this.sticky = 'skip';
+        return 'skip';
+      default:
+        return 'skip';
+    }
+  }
+}
+
+// If `filePath`'s location maps to a Wiki.js-legal path, returns it unchanged.
+// Otherwise renames the file (honoring `mode`: prompt / auto / off) to the
+// sanitized location so local and remote agree and round-trips stay stable, and
+// returns the new path — or `undefined` if the file should be skipped this run.
+async function ensureLegalLocation(
+  ctx: SyncContext,
+  filePath: string,
+  out: vscode.OutputChannel,
+  mode: AutoRenameMode,
+  resolver: RenameResolver
+): Promise<string | undefined> {
+  const legalPath = pagePathForFile(ctx, filePath);
+  const target = fileForPagePath(ctx, legalPath);
+  if (path.resolve(target) === path.resolve(filePath)) return filePath;
+
+  const relFrom = path.relative(ctx.root, filePath);
+  const relTo = path.relative(ctx.root, target);
+
+  if (mode === 'off') {
+    out.appendLine(
+      `skipped ${relFrom}: location maps to the Wiki.js-illegal path "${legalPath}" ` +
+        `(wikijsSync.autoRenameIllegalPaths is "off")`
+    );
+    return undefined;
+  }
+  if (mode === 'prompt') {
+    if ((await resolver.resolve(relFrom, relTo)) === 'skip') {
+      out.appendLine(`skipped ${relFrom}: rename to "${relTo}" declined`);
+      return undefined;
+    }
+  }
+
+  try {
+    await fs.access(target);
+    out.appendLine(
+      `skipped ${relFrom}: cannot rename to "${relTo}" — a file is already there`
+    );
+    return undefined;
+  } catch {
+    /* target free */
+  }
+
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const edit = new vscode.WorkspaceEdit();
+  edit.renameFile(vscode.Uri.file(filePath), vscode.Uri.file(target), {
+    overwrite: false,
+  });
+  if (!(await vscode.workspace.applyEdit(edit))) {
+    await fs.rename(filePath, target);
+  }
+  out.appendLine(`renamed ${relFrom} -> ${relTo} (Wiki.js-legal path)`);
+  return target;
+}
+
 // -- core upload (create / update one page) -------------------------------
 
 // Serialize uploads per local file so two near-simultaneous triggers can't both
@@ -1205,6 +1394,10 @@ interface SyncUploadOpts {
   adoptId?: number;
   /** Shared across a batch so "apply to all" sticks. */
   moveResolver?: MoveResolver;
+  /** Shared across a batch so the illegal-path "…All" answer sticks. */
+  renameResolver?: RenameResolver;
+  /** The caller already ran `ensureLegalLocation` (e.g. syncFolder). */
+  skipRenameCheck?: boolean;
 }
 
 async function syncUpload(
@@ -1219,14 +1412,28 @@ async function syncUpload(
   );
 }
 
+// Returns true if the page was pushed, false if the file was skipped (an
+// unresolved move/copy, a newer server copy, or a declined illegal-path rename).
 async function syncUploadLocked(
   context: vscode.ExtensionContext,
   out: vscode.OutputChannel,
   ctx: SyncContext,
   filePath: string,
   opts: SyncUploadOpts
-) {
+): Promise<boolean> {
   const token = await resolveToken(context, ctx);
+
+  if (!opts.skipRenameCheck) {
+    const legal = await ensureLegalLocation(
+      ctx,
+      filePath,
+      out,
+      getSettings().autoRenameIllegalPaths,
+      opts.renameResolver ?? new RenameResolver(false)
+    );
+    if (legal === undefined) return false;
+    filePath = legal;
+  }
 
   const text = await fs.readFile(filePath, 'utf8');
   const { meta, content, hadFrontMatter } = parsePageFileLoose(text, filePath);
@@ -1251,7 +1458,7 @@ async function syncUploadLocked(
         out.appendLine(
           `skipped ${filePath}: move/copy of page id ${meta.id} not resolved`
         );
-        return;
+        return false;
       }
       if (choice === 'new') meta.id = undefined;
     }
@@ -1270,7 +1477,7 @@ async function syncUploadLocked(
         out.appendLine(
           `skipped ${meta.path}: server copy is newer, upload cancelled`
         );
-        return;
+        return false;
       }
     }
   }
@@ -1282,7 +1489,7 @@ async function syncUploadLocked(
     out.appendLine(`updated ${meta.path} (id ${meta.id})`);
     if (!opts.silent)
       vscode.window.setStatusBarMessage(`Wiki.js: updated ${meta.path}`, 3000);
-    return;
+    return true;
   }
 
   let created;
@@ -1315,7 +1522,7 @@ async function syncUploadLocked(
     out.appendLine(`updated ${meta.path} (id ${meta.id})`);
     if (!opts.silent)
       vscode.window.setStatusBarMessage(`Wiki.js: updated ${meta.path}`, 3000);
-    return;
+    return true;
   }
 
   meta.id = created.id;
@@ -1324,6 +1531,7 @@ async function syncUploadLocked(
   out.appendLine(`created ${meta.path} (id ${meta.id})`);
   if (!opts.silent)
     vscode.window.setStatusBarMessage(`Wiki.js: created ${meta.path}`, 3000);
+  return true;
 }
 
 // -- filesystem walks -----------------------------------------------------

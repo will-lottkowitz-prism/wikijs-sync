@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   PageMeta,
+  needsCanonicalRewrite,
   pageDigest,
   parsePageFile,
   sameInstant,
@@ -72,6 +73,38 @@ describe('serializeSynced round-trips', () => {
       'editor: markdown\nlocale: en\nisPublished: true\nisPrivate: false\n' +
       'tags: []\n---\nbody\n';
     expect(parsePageFile(legacy).meta.path).toBe('');
+  });
+});
+
+describe('needsCanonicalRewrite', () => {
+  const legacyWithPath =
+    '---\nid: 3\ntitle: Page Title\ndescription: desc\npath: Old/stale\n' +
+    'editor: markdown\nlocale: en\nisPublished: true\nisPrivate: false\n' +
+    'tags: [a, b]\nupdatedAt: 2026-08-06T04:13:34.389Z\n---\nbody\n';
+
+  it('is true for a file that still carries a path: line', () => {
+    const { meta, content } = parsePageFile(legacyWithPath);
+    expect(needsCanonicalRewrite(legacyWithPath, meta, content)).toBe(true);
+    // and the canonical form it would be rewritten to has no path line
+    expect(serializePageFile(meta, content)).not.toMatch(/^path:/m);
+  });
+
+  it('is false for a file already in canonical form (CRLF tolerated)', () => {
+    const text = serializePageFile(meta, 'body\n');
+    const { meta: parsed, content } = parsePageFile(text);
+    expect(needsCanonicalRewrite(text, parsed, content)).toBe(false);
+    expect(
+      needsCanonicalRewrite(text.replace(/\n/g, '\r\n'), parsed, content)
+    ).toBe(false);
+  });
+
+  it('is true for an unknown/legacy front-matter key', () => {
+    const text = serializePageFile(meta, 'body\n').replace(
+      '\n---\nbody\n',
+      '\nlegacyKey: 1\n---\nbody\n'
+    );
+    const { meta: parsed, content } = parsePageFile(text);
+    expect(needsCanonicalRewrite(text, parsed, content)).toBe(true);
   });
 });
 

@@ -102,6 +102,7 @@ With `wikiPath` set to `Products/x` and the `.wikisync.json` in folder `F`:
 | `F/intro.md` | `Products/x/intro` |
 | `F/guide/setup.md` | `Products/x/guide/setup` |
 | `F/index.md` | `Products/x` (the section landing page) |
+| `F/Node.js Notes.md` | `Products/x/Node-js-Notes` (file renamed — see [Page paths](#page-paths)) |
 | `F/diagram.png` | asset `/Products/x/diagram.png` (when `assets: true`) |
 
 An empty or absent `wikiPath` maps the folder straight to the wiki root.
@@ -119,6 +120,7 @@ Right-click in the Explorer, or the Command Palette (`Ctrl/Cmd+Shift+P` → "Wik
 | **Sync Folder with Wiki (Two-Way)** | Right-click a folder. For each local `.md`, a three-way compare against its last-synced state: unchanged on both sides → skipped; changed only locally → pushed; changed only on the server → pulled (so a web-UI edit is never clobbered); changed on **both** sides → prompt to pick a winner. Remote pages with no local file are downloaded. Eligible non-`.md` files upload as assets. |
 | **Upload Folder (Push Subtree)** | Right-click a folder. One-way push of every eligible `.md` (and asset) under it. Nothing is pulled. |
 | **Download Folder (Pull Subtree)** | Right-click a folder. One-way pull of every wiki page at or under the folder's mapped path, **overwriting local files**. Local-only files are left in place, not deleted. |
+| **Normalize Front Matter (Folder)** | Right-click a folder. Rewrites every `.md` so its front-matter block is canonical — drops a stale `path:` line and any unknown keys, fixes key order. Page bodies untouched. **Local only**: touches nothing on the wiki, needs no token or URL. |
 | **Upload Asset** | Right-click a non-`.md` file. Under a synced folder its server location is derived automatically; elsewhere you pick the asset folder. Offers to copy / insert a Markdown link. |
 | **Download All Pages** / **Upload All Pages** / **Download Page…** | *Legacy whole-wiki mirror* — operate on `wikijsSync.contentDir` mapped to the wiki root. Shown only on the `contentDir` folder. Use the folder commands with `.wikisync.json` instead. |
 
@@ -135,8 +137,29 @@ saved (if it's inside a synced folder and passes that folder's include/exclude).
 | `wikijsSync.uploadOnSave` | `false` | Upload a `.md` file on every save. |
 | `wikijsSync.syncNonMarkdownAsAssets` | `true` | Default for a `.wikisync.json`'s `"assets"`. |
 | `wikijsSync.exclude` | `["**/.*", "**/node_modules/**"]` | Default ignore globs for folders that don't set their own `"exclude"` / `"include"`. |
+| `wikijsSync.autoRenameIllegalPaths` | `"prompt"` | When a file's location would produce a Wiki.js-illegal path: `prompt` (ask, with a "…All" button), `auto` (rename + log), `off` (skip + report). |
 
-## File format
+## Page paths
+
+A page's Wiki.js path is **derived entirely from where the file sits** relative to
+the folder its `.wikisync.json` maps to — `guide/intro.md` in a folder mapped to
+`Products/x` is page `Products/x/guide/intro`, and a folder's `index.md` is that
+folder's landing page. There is **no `path` field** in the front matter; a stale
+one left by an older version is ignored and dropped the next time the file is
+written (run **Normalize Front Matter (Folder)** to clean a whole tree at once,
+offline). Move or rename a file and the page moves with it on the next sync — its
+`id` travels in the front matter, so history is kept. If a file carries an `id`
+but sits where that page *isn't* on the server, the extension asks once whether
+it's a move or a copy that should become its own new page (answer for a whole
+reorg with **…All**).
+
+Wiki.js rejects a page path containing `.`, a space, `\` or `//`, so a file whose
+name or folder would produce one is **renamed** to a legal form first (illegal
+characters → `-`, case preserved), controlled by `wikijsSync.autoRenameIllegalPaths`
+— e.g. `Node.js Notes.md` → `Node-js-Notes.md` → page `…/Node-js-Notes`. Renaming
+doesn't fix `[links](/other/page.md)` in *other* files that point at the old name.
+
+## Front matter
 
 Each local file is Markdown with a YAML front matter block:
 
@@ -145,7 +168,6 @@ Each local file is Markdown with a YAML front matter block:
 id: 3
 title: Page Title
 description: "..."
-path: Products/my-project/technical-documentation
 editor: markdown
 locale: en
 isPublished: true
@@ -173,9 +195,9 @@ before this field existed get one re-upload on the next sync, then settle.
 ### First upload without front matter
 
 Any upload path accepts a plain `.md` file with no `---` block. Metadata is
-generated: `title` from a leading `# Heading` (else the filename); `path` from
-the file's location within its synced folder; `editor`/`locale`/`isPublished`/
-`isPrivate`/`tags` get defaults (`markdown`, `en`, `true`, `false`, `[]`). The
+generated: `title` from a leading `# Heading` (else the filename);
+`editor`/`locale`/`isPublished`/`isPrivate`/`tags` get defaults (`markdown`,
+`en`, `true`, `false`, `[]`); the page path comes from the file's location. The
 generated front matter is written back to the file once the page is created, so
 this only happens once per file.
 

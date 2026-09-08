@@ -97,6 +97,22 @@ export function serializeSynced(meta: PageMeta, content: string): string {
   );
 }
 
+// True when a file's on-disk text (CRLF-normalized, as everything here reads it)
+// isn't the canonical serialization of what it parses to — a stale `path:` line
+// left by an older version, reordered or unknown front-matter keys, extra blank
+// lines, a missing trailing newline. Folder sync uses this to tidy an otherwise
+// unchanged file in place: no network, no syncHash change (pageDigest already
+// ignores everything this rewrites).
+export function needsCanonicalRewrite(
+  originalText: string,
+  meta: PageMeta,
+  content: string
+): boolean {
+  return (
+    originalText.replace(/\r\n/g, '\n') !== serializePageFile(meta, content)
+  );
+}
+
 // True when two Wiki.js timestamps denote the same instant. Wiki.js's GraphQL
 // serializes timestamps inconsistently between `pages.list`, `pages.single` and
 // mutation results (millisecond precision, timezone offset), so a raw string

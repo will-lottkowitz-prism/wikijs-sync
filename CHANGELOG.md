@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.10.0 — 2026-09-08
+
+- **Page paths are always sanitized to a form Wiki.js accepts.** Wiki.js rejects
+  a path containing `.`, a space, `\` or `//`, and a first segment that's a
+  single character, a locale code, or a reserved word (`js`, `api`, …). The path
+  derived from a file's location now has those mapped out (illegal characters →
+  `-`, case preserved), so a page like `Node.js Notes.md` uploads cleanly
+  instead of failing.
+- **Local files with an illegal location are renamed.** When a file's name or
+  folder would produce a path Wiki.js won't take, the extension renames the
+  local file to the sanitized form so local and remote agree and round-trips
+  stay stable. New setting `wikijsSync.autoRenameIllegalPaths`: `prompt`
+  (default — asks, with a "Rename All" button for bulk runs), `auto` (rename +
+  log), `off` (skip the file and report it). Renaming does **not** fix
+  `[links](/other/page.md)` in other files that point at the old name.
+- **`path:` is stripped from files that were otherwise unchanged.** Older
+  versions stored a `path:` line in the front matter; 0.9.0 stopped writing it
+  but only rewrote a file when it actually synced, so untouched files kept the
+  stale line. **Sync Folder** now tidies those in place (reported as `tidied`) —
+  no network call, no page-history bump.
+- **New command: Normalize Front Matter (Folder).** Rewrites every `.md` under a
+  folder so its front-matter block is canonical (drops `path:` and any unknown
+  keys, fixes key order) — page bodies untouched, no network access at all. A
+  one-shot cleanup that needs no token or wiki URL.
+
 ## 0.9.0 — 2026-09-03
 
 - **`path` is gone from the front matter.** A page's Wiki.js path is now derived
