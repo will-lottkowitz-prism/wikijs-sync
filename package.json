@@ -2,7 +2,7 @@
   "name": "wikijs-sync",
   "displayName": "Wiki.js Sync",
   "description": "Download and upload Wiki.js pages as local Markdown files, SFTP-style, with an upload-on-save option.",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "publisher": "xQx",
   "license": "MIT",
   "author": {

@@ -903,6 +903,7 @@ async function syncFolder(
   const matchedRemoteIds = new Set<number>();
   const moveResolver = new MoveResolver(true);
   const renameResolver = new RenameResolver(true);
+  const conflictResolver = new ConflictResolver(true);
   const renameMode = getSettings().autoRenameIllegalPaths;
 
   const stats = newStats();
@@ -1050,16 +1051,11 @@ async function syncFolder(
           }
 
           if (localChanged && remoteChanged) {
-            const choice = await vscode.window.showWarningMessage(
-              `Wiki.js Sync: "${remotePath}" changed both locally and on the server since the last sync. Which copy wins?`,
-              { modal: true },
-              'Upload (keep my local copy)',
-              'Download (keep the server copy)'
-            );
-            if (choice === 'Upload (keep my local copy)') {
+            const choice = await conflictResolver.resolve(remotePath);
+            if (choice === 'upload') {
               await pushLocal({ adoptId: remote.id });
               stats.uploaded++;
-            } else if (choice === 'Download (keep the server copy)') {
+            } else if (choice === 'download') {
               await pullRemote(remote.id, '(conflict; server copy kept)');
               stats.downloaded++;
             } else {
@@ -1304,6 +1300,49 @@ class RenameResolver {
       case 'Skip All':
         this.sticky = 'skip';
         return 'skip';
+      default:
+        return 'skip';
+    }
+  }
+}
+
+// -- both-sides conflict resolution ------------------------------------
+
+// A file changed both locally and on the server since the last sync — only the
+// user can say which copy wins. Asks once per file; a batch reorg can answer for
+// everything with "…All".
+type ConflictChoice = 'upload' | 'download' | 'skip';
+
+class ConflictResolver {
+  private sticky?: ConflictChoice;
+
+  /** `batch` enables the "apply to all" buttons (pointless for a single file). */
+  constructor(private readonly batch = false) {}
+
+  async resolve(fileLabel: string): Promise<ConflictChoice> {
+    if (this.sticky) return this.sticky;
+
+    const buttons = this.batch
+      ? ['Upload', 'Upload All', 'Download', 'Download All']
+      : ['Upload', 'Download'];
+    const choice = await vscode.window.showWarningMessage(
+      `Wiki.js Sync: "${fileLabel}" changed both locally and on the server ` +
+        `since the last sync. Keep your local copy (Upload) or the server copy ` +
+        `(Download)?`,
+      { modal: true },
+      ...buttons
+    );
+    switch (choice) {
+      case 'Upload':
+        return 'upload';
+      case 'Upload All':
+        this.sticky = 'upload';
+        return 'upload';
+      case 'Download':
+        return 'download';
+      case 'Download All':
+        this.sticky = 'download';
+        return 'download';
       default:
         return 'skip';
     }

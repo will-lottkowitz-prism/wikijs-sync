@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1 — 2026-09-09
+
+- **Sync Folder's "changed both locally and on the server" prompt now has
+  "Upload All" / "Download All"** — pick one resolution once and it applies to
+  every remaining conflict in the run (same as the move/copy and rename
+  prompts). Cancelling still leaves that file untouched.
+
 ## 0.10.0 — 2026-09-08
 
 - **Page paths are always sanitized to a form Wiki.js accepts.** Wiki.js rejects
