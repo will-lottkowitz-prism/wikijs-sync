@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0 — 2026-09-09
+
+- **Symlinked pages and folders are followed when syncing a folder.**
+  `fs.readdir` doesn't resolve links and reports a symlink as neither a file nor
+  a directory, so the folder walk silently skipped every symlinked `.md` and
+  every symlinked subfolder. For a wiki page kept as a symlink into another repo
+  (e.g. an extension README), **Sync Folder** then treated it as having no local
+  file and, in its end-of-run download pass, wrote the server copy straight
+  *through* the link — repeatedly overwriting the real file with a stale server
+  revision. The walk now resolves a link to classify its target, with a
+  realpath guard against symlink cycles.
+
+
 ## 0.11.0 — 2026-09-09
 
 - **Page paths no longer mangle characters Wiki.js actually accepts.** 0.10.0's

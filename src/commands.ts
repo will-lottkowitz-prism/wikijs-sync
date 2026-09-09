@@ -1593,8 +1593,20 @@ async function findAssetFiles(dir: string): Promise<string[]> {
 
 async function walk(
   dir: string,
-  keep: (name: string) => boolean
+  keep: (name: string) => boolean,
+  seen: Set<string> = new Set()
 ): Promise<string[]> {
+  // Guard against a symlink cycle (and walking the same real directory twice
+  // when two links point at it).
+  let realDir: string;
+  try {
+    realDir = await fs.realpath(dir);
+  } catch {
+    return [];
+  }
+  if (seen.has(realDir)) return [];
+  seen.add(realDir);
+
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -1606,9 +1618,28 @@ async function walk(
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      results.push(...(await walk(full, keep)));
-    } else if (entry.isFile() && keep(entry.name)) {
+
+    // A symlink's Dirent reports neither isFile() nor isDirectory(), so an
+    // unresolved link was silently skipped — and for a symlinked page (a wiki
+    // page kept as a link to, say, a README in another repo) syncFolder's
+    // "download pages with no local file" pass then wrote the server copy
+    // *through* the link, clobbering its target. Resolve links so they walk
+    // like the real thing.
+    let isDir = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      try {
+        const st = await fs.stat(full); // follows the link
+        isDir = st.isDirectory();
+        isFile = st.isFile();
+      } catch {
+        continue; // dangling link
+      }
+    }
+
+    if (isDir) {
+      results.push(...(await walk(full, keep, seen)));
+    } else if (isFile && keep(entry.name)) {
       results.push(full);
     }
   }
