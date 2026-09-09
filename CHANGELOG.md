@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.0 — 2026-09-09
+
+- **Page paths no longer mangle characters Wiki.js actually accepts.** 0.10.0's
+  sanitizer was an allow-list — anything but a letter, digit or `_ ~ -` became
+  `-` — so a file named with `+`, `#`, `(`, `)`, `,`, `!`, `'`, `&` or `=` was
+  treated as an illegal location and renamed, even though Wiki.js stores all of
+  those verbatim. If the file had already adopted a page `id`, that forced
+  rename knocked it off its page: the next **Sync Folder** saw "id lives
+  elsewhere", the move/copy prompt fired, and the page was left duplicated while
+  the original re-downloaded under its old name — so the prompt came back every
+  run. The sanitizer is now a deny-list matched to Wiki.js's real rules
+  (`server/models/pages.js` rejects only `.`, space, `\`, `//`;
+  `server/helpers/page.js` strips `" \ | < > : * ?` and control chars; the first
+  segment still can't be a single char, locale code or reserved word).
+- **Sync Folder no longer re-creates a renamed/moved page under its old
+  filename.** The end-of-run "download pages with no local file" pass now skips
+  any page id a local file in the run already claims.
+
+
 ## 0.10.1 — 2026-09-09
 
 - **Sync Folder's "changed both locally and on the server" prompt now has

@@ -44,6 +44,14 @@ describe('pagePathForFile', () => {
   it('does not reserved-word-guard a non-first segment', () => {
     expect(pagePathForFile(ctx, '/w/docs/js/api.md')).toBe('Products/x/js/api');
   });
+  it('leaves characters Wiki.js accepts verbatim (+, parens, #, comma)', () => {
+    expect(pagePathForFile(legacy, '/w/content/Trac/V/OwnC++Notes.md')).toBe(
+      'Trac/V/OwnC++Notes'
+    );
+    expect(
+      pagePathForFile(legacy, '/w/content/oam/webadmin(secondrun).md')
+    ).toBe('oam/webadmin(secondrun)');
+  });
 });
 
 describe('sanitizeWikiPath', () => {
@@ -51,11 +59,15 @@ describe('sanitizeWikiPath', () => {
     ['Servers/District/router', 'Servers/District/router'],
     ['Node.js Notes', 'Node-js-Notes'],
     ['abc//b', 'abc/b'],
-    ['weird\\name', 'weird-name'],
+    ['weird\\name', 'weirdname'], // Wiki.js parsePath strips '\' entirely
     ['dots...everywhere', 'dots-everywhere'],
     ['  spaced  ', 'spaced'], // spaces -> '-', then leading/trailing '-' trimmed
     ['trailing-', 'trailing'],
     ['café/über', 'café/über'], // accented letters kept
+    ['Trac/V/OwnC++Notes', 'Trac/V/OwnC++Notes'], // '+' is legal in Wiki.js
+    ['oam/webadmin(secondrun)', 'oam/webadmin(secondrun)'], // parens are legal
+    ['a#b,c!d=e&f', 'a#b,c!d=e&f'], // none of these are rejected or stripped
+    ['quote"pipe|lt<gt>colon:star*q?', 'quotepipeltgtcolonstarq'], // stripped set
   ];
   it.each(cases)('%s -> %s', (input, expected) => {
     expect(sanitizeWikiPath(input)).toBe(expected);

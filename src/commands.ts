@@ -951,6 +951,14 @@ async function syncFolder(
 
         meta.path = pagePathForFile(ctx, filePath);
 
+        // This local file is the live source for the page it carries an id for,
+        // wherever the pre-sync `listPages` snapshot thinks that id lives. Mark
+        // the id handled so the end-of-run "download pages with no local file"
+        // pass can't re-materialise it under its old (stale) filename after a
+        // rename or move. The page still gets matched by path below if its
+        // genuine file is also in scope this run.
+        if (meta.id !== undefined) matchedRemoteIds.add(meta.id);
+
         const pushLocal = (extra?: {
           forceCreate?: boolean;
           adoptId?: number;

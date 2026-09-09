@@ -24,16 +24,23 @@ export const normalizeWikiPath = (p: string | undefined): string =>
   (p ?? '').trim().replace(/^\/+|\/+$/g, '');
 
 // Wiki.js rejects a page path outright (server/models/pages.js createPage /
-// movePage) if any segment contains `.`, a space, `\` or `//`; parsePath also
-// strips control chars and `" | < > : * ?`. And the *first* segment can't be a
-// single character, a locale code (`xx` / `xx-XX`), or one of a handful of
-// reserved words. `sanitizeWikiPath` maps any local file/folder name to a path
-// Wiki.js will accept, so callers never have to think about it.
+// movePage) only if it contains `.`, a space, `\` or `//`; server/helpers/
+// page.js parsePath additionally *strips* the set `\x00-\x1f \x80-\x9f " \ | <
+// > : * ?`. And the *first* segment can't be a single character, a locale code
+// (`xx` / `xx-XX`), or one of a handful of reserved words. `sanitizeWikiPath`
+// maps any local file/folder name to a path Wiki.js will accept, so callers
+// never have to think about it.
 //
-// Per-segment allow-list: Unicode letters/digits (Wiki.js keeps accented
-// characters — parsePath only strips \x80-\x9f), plus `_ ~ -`. Everything else
-// — dots, spaces, punctuation, control characters — becomes `-`.
-const UNSAFE_IN_SEGMENT = /[^\p{L}\p{N}_~-]+/gu;
+// This is a *deny-list*, matched to Wiki.js exactly — an earlier allow-list
+// (letters/digits/`_ ~ -` only) also mangled characters Wiki.js keeps verbatim
+// (`+ # ( ) , ! ' & = @` …), which forced spurious local renames and, once a
+// file had adopted a page id, orphaned that page on the next sync.
+//   - `.` and whitespace → `-` (Wiki.js hard-rejects these)
+//   - the parsePath "unsafe" set → removed (Wiki.js strips them, so dropping
+//     them here keeps the local path equal to what the server stores)
+//   - everything else (incl. accented letters, mixed case) is left untouched
+const STRIP_IN_SEGMENT = /[\x00-\x1f\x80-\x9f"\\|<>:*?]/g;
+const DASH_IN_SEGMENT = /[.\s]+/g;
 const LOCALE_RE = /^[A-Za-z]{2}(-[A-Za-z]{2})?$/;
 // From Wiki.js: client/components/common/page-selector.vue + data.reservedPaths.
 const RESERVED_FIRST = new Set([
@@ -54,7 +61,8 @@ const RESERVED_FIRST = new Set([
 
 const sanitizeSegment = (seg: string): string => {
   const s = seg
-    .replace(UNSAFE_IN_SEGMENT, '-')
+    .replace(STRIP_IN_SEGMENT, '')
+    .replace(DASH_IN_SEGMENT, '-')
     .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '');
   return s || '-';
@@ -81,10 +89,12 @@ const guardFirstSegment = (p: string): string => {
 };
 
 /**
- * Map any `/`-joined path to a Wiki.js-legal page path: illegal characters
- * (`.`, space, `\`, control chars, …) become `-`, `//` collapses, and a first
- * segment Wiki.js would reject (1 char / locale code / reserved word) is
- * prefixed with `_`. Idempotent: sanitizing an already-legal path is a no-op.
+ * Map any `/`-joined path to a Wiki.js-legal page path: `.` and whitespace
+ * become `-`, the parsePath "unsafe" set (`" \ | < > : * ?`, control chars) is
+ * dropped, `//` collapses, and a first segment Wiki.js would reject (1 char /
+ * locale code / reserved word) is prefixed with `_`. Anything Wiki.js accepts
+ * as-is (`+ # ( ) ,` … accented letters, mixed case) is left untouched.
+ * Idempotent: sanitizing an already-legal path is a no-op.
  */
 export const sanitizeWikiPath = (rawPath: string): string =>
   guardFirstSegment(sanitizeSegments(rawPath));
