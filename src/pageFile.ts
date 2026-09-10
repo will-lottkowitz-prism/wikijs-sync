@@ -44,9 +44,10 @@ function yamlUnstr(value: string): string {
   return v;
 }
 
-export function serializePageFile(meta: PageMeta, content: string): string {
+// The `key: value` metadata lines shared by the front-matter block and the
+// sidecar file (see `sidecar.ts`). No `---` fences, no trailing newline.
+export function serializeMetaLines(meta: PageMeta): string[] {
   const lines = [
-    '---',
     `id: ${meta.id ?? ''}`,
     `title: ${yamlStr(meta.title)}`,
     `description: ${yamlStr(meta.description)}`,
@@ -62,8 +63,11 @@ export function serializePageFile(meta: PageMeta, content: string): string {
   if (meta.syncHash) {
     lines.push(`syncHash: ${meta.syncHash}`);
   }
-  lines.push('---', '');
-  return lines.join('\n') + content;
+  return lines;
+}
+
+export function serializePageFile(meta: PageMeta, content: string): string {
+  return ['---', ...serializeMetaLines(meta), '---', ''].join('\n') + content;
 }
 
 // A stable fingerprint of the parts of a page that get pushed to Wiki.js — the
@@ -173,9 +177,18 @@ export function parsePageFile(text: string): {
     );
   }
   const [, front, content] = m;
+  return { meta: parseMetaFromLines(front), content };
+}
 
+// Parse the `key: value` lines of a metadata block — a front-matter block or a
+// sidecar file — into a PageMeta. Blank lines, `#` comment lines and lines with
+// no `:` are ignored. `path` is never read here: it is derived from the file's
+// location by the caller, and a stale `path:` line left by an older version is
+// dropped.
+export function parseMetaFromLines(block: string): PageMeta {
   const raw: Record<string, string> = {};
-  for (const line of front.split('\n')) {
+  for (const line of block.replace(/\r\n/g, '\n').split('\n')) {
+    if (/^\s*#/.test(line)) continue;
     const idx = line.indexOf(':');
     if (idx === -1) continue;
     raw[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
@@ -190,12 +203,10 @@ export function parsePageFile(text: string): {
     }
   }
 
-  const meta: PageMeta = {
+  return {
     id: raw.id ? Number(raw.id) : undefined,
     title: yamlUnstr(raw.title ?? ''),
     description: yamlUnstr(raw.description ?? ''),
-    // `path` is no longer stored in front matter — it is derived from the file's
-    // location by the caller. A stale `path:` line in an older file is ignored.
     path: '',
     editor: raw.editor || 'markdown',
     locale: raw.locale || 'en',
@@ -205,7 +216,6 @@ export function parsePageFile(text: string): {
     updatedAt: raw.updatedAt || undefined,
     syncHash: raw.syncHash || undefined,
   };
-  return { meta, content };
 }
 
 // Like parsePageFile, but tolerates a file with no front matter block by

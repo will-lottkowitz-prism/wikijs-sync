@@ -34,6 +34,12 @@
       "items": { "type": "string" },
       "description": "Ignorelist. Files matching one of these gitignore-style globs never sync. Replaces the wikijsSync.exclude setting for this folder.",
       "examples": [["drafts/**", "*.tmp"]]
+    },
+    "metadataStorage": {
+      "type": "string",
+      "enum": ["frontmatter", "sidecar"],
+      "description": "Where per-page sync metadata is kept for this folder. \"frontmatter\" (default): a --- YAML block at the top of each .md. \"sidecar\": a hidden sibling file .<name>.md.wikisync.yaml, leaving the .md as pure Markdown for publishing elsewhere. Overrides the wikijsSync.metadataStorage setting. Commit the sidecar files alongside the .md files.",
+      "default": "frontmatter"
     }
   }
 }

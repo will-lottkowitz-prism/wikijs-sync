@@ -2,7 +2,7 @@
   "name": "wikijs-sync",
   "displayName": "Wiki.js Sync",
   "description": "Download and upload Wiki.js pages as local Markdown files, SFTP-style, with an upload-on-save option.",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "publisher": "xQx",
   "license": "MIT",
   "author": {
@@ -95,6 +95,20 @@
           "order": 7,
           "markdownDescription": "A page's Wiki.js path is derived from the file's location, and Wiki.js rejects a path containing `.`, a space, `\\` or `//`. When a local file's location would produce an illegal path: `prompt` asks whether to rename the file to a legal form (with a \"…All\" button for bulk runs); `auto` renames silently and logs it; `off` skips the file and reports it. Illegal characters become `-`; case is preserved."
         },
+        "wikijsSync.metadataStorage": {
+          "type": "string",
+          "enum": [
+            "frontmatter",
+            "sidecar"
+          ],
+          "enumDescriptions": [
+            "A --- YAML front-matter block at the top of each .md file (the default).",
+            "A hidden sibling file (.<name>.md.wikisync.yaml), leaving the .md as pure Markdown."
+          ],
+          "default": "frontmatter",
+          "order": 8,
+          "markdownDescription": "Where the per-page sync metadata (`id`, `title`, `description`, `tags`, `updatedAt`, `syncHash`, …) is kept.\n\n- `frontmatter` (default): a `---` YAML block at the top of every `.md`.\n- `sidecar`: a hidden sibling file `.<name>.md.wikisync.yaml`, so the `.md` itself is just Markdown — useful when the same files are also published somewhere other than the wiki. Commit the sidecar files alongside the `.md` files.\n\nOverride per folder with `\"metadataStorage\"` in a `.wikisync.json`. Switching modes migrates each file the next time it syncs — or run **Wiki.js Sync: Normalize Metadata (Folder)** to convert a whole tree offline."
+        },
         "wikijsSync.autoUpdate": {
           "type": "string",
           "enum": [
@@ -172,7 +186,7 @@
       },
       {
         "command": "wikijsSync.normalizeFolder",
-        "title": "Wiki.js Sync: Normalize Front Matter (Folder)"
+        "title": "Wiki.js Sync: Normalize Metadata (Folder)"
       },
       {
         "command": "wikijsSync.uploadAsset",

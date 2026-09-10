@@ -14,15 +14,14 @@ import {
   updatePage,
   uploadAsset,
 } from './wikijsClient';
+import { pageDigest, sameInstant } from './pageFile';
 import {
-  needsCanonicalRewrite,
-  pageDigest,
-  parsePageFile,
-  parsePageFileLoose,
-  sameInstant,
-  serializePageFile,
-  serializeSynced,
-} from './pageFile';
+  loadPage,
+  pageNeedsRewrite,
+  renameSidecar,
+  savePage,
+} from './pageStore';
+import { isSidecarName } from './sidecar';
 import {
   AutoRenameMode,
   CONFIG_FILENAME,
@@ -36,6 +35,7 @@ import {
   pagePathForFile,
   resolveContext,
   resolveLegacyContext,
+  resolveMetadataStorage,
   resolveToken,
 } from './config';
 
@@ -163,6 +163,15 @@ export function registerCommands(context: vscode.ExtensionContext) {
       (uri?: vscode.Uri) => guarded(() => normalizeFolder(out, uri))
     ),
     vscode.workspace.onDidSaveTextDocument((doc) => onSave(context, out, doc)),
+    // Keep a page's metadata sidecar with its `.md` when the file is renamed or
+    // moved in the Explorer (the plugin's own illegal-path rename handles itself).
+    vscode.workspace.onDidRenameFiles((e) => {
+      for (const { oldUri, newUri } of e.files) {
+        if (oldUri.fsPath.endsWith('.md') && newUri.fsPath.endsWith('.md')) {
+          void renameSidecar(oldUri.fsPath, newUri.fsPath);
+        }
+      }
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('wikijsSync')) updateContentRootContext();
     }),
@@ -296,11 +305,10 @@ async function downloadAll(
         const full = await getPage(ctx.url, token, p.id);
         const filePath = fileForPagePath(ctx, full.path);
         await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(
-          filePath,
-          serializeSynced(full, full.content),
-          'utf8'
-        );
+        await savePage(filePath, full, full.content, {
+          storage: ctx.metadataStorage,
+          stampSyncHash: true,
+        });
         out.appendLine(`downloaded ${full.path} -> ${filePath}`);
       }
     }
@@ -327,7 +335,10 @@ async function pickAndDownload(
   const full = await getPage(ctx.url, token, picked.id);
   const filePath = fileForPagePath(ctx, full.path);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, serializeSynced(full, full.content), 'utf8');
+  await savePage(filePath, full, full.content, {
+    storage: ctx.metadataStorage,
+    stampSyncHash: true,
+  });
   out.appendLine(`downloaded ${full.path} -> ${filePath}`);
 
   const doc = await vscode.workspace.openTextDocument(filePath);
@@ -343,8 +354,7 @@ async function downloadFileCommand(
   const ctx = await resolveContext(filePath);
   const token = await resolveToken(context, ctx);
 
-  const text = await fs.readFile(filePath, 'utf8');
-  const { meta } = parsePageFile(text);
+  const { meta } = await loadPage(filePath);
   if (!meta.id) {
     throw new Error(
       `${filePath} has no page id yet (it was never uploaded). Use "Download Page..." to fetch by path instead.`
@@ -352,7 +362,10 @@ async function downloadFileCommand(
   }
 
   const full = await getPage(ctx.url, token, meta.id);
-  await fs.writeFile(filePath, serializeSynced(full, full.content), 'utf8');
+  await savePage(filePath, full, full.content, {
+    storage: ctx.metadataStorage,
+    stampSyncHash: true,
+  });
   out.appendLine(
     `downloaded ${full.path} -> ${filePath} (overwrote local copy)`
   );
@@ -857,11 +870,10 @@ async function downloadFolder(
         try {
           const full = await getPage(ctx.url, token, page.id);
           await fs.mkdir(path.dirname(filePath), { recursive: true });
-          await fs.writeFile(
-            filePath,
-            serializeSynced(full, full.content),
-            'utf8'
-          );
+          await savePage(filePath, full, full.content, {
+            storage: ctx.metadataStorage,
+            stampSyncHash: true,
+          });
           out.appendLine(`download: ${full.path} -> ${filePath}`);
           stats.downloaded++;
         } catch (err: any) {
@@ -938,14 +950,11 @@ async function syncFolder(
         const filePath = legal;
         const relFilePath = path.relative(folderPath, filePath);
 
-        const text = await fs.readFile(filePath, 'utf8');
-        const { meta, content, hadFrontMatter } = parsePageFileLoose(
-          text,
-          filePath
-        );
+        const loaded = await loadPage(filePath);
+        const { meta, content, hadFrontMatter } = loaded;
         if (!hadFrontMatter) {
           out.appendLine(
-            `sync: ${relFilePath} had no front matter; generating defaults for first upload`
+            `sync: ${relFilePath} had no metadata; generating defaults for first upload`
           );
         }
 
@@ -971,11 +980,10 @@ async function syncFolder(
           });
         const pullRemote = async (id: number, note: string) => {
           const full = await getPage(ctx.url, token, id);
-          await fs.writeFile(
-            filePath,
-            serializeSynced(full, full.content),
-            'utf8'
-          );
+          await savePage(filePath, full, full.content, {
+            storage: ctx.metadataStorage,
+            stampSyncHash: true,
+          });
           out.appendLine(
             `sync: downloaded ${full.path} -> ${filePath} ${note}`
           );
@@ -1041,16 +1049,16 @@ async function syncFolder(
             // (or other non-canonical front matter). Tidy it in place — no
             // network, no history bump (pageDigest ignores everything this
             // rewrites, so syncHash still matches next run).
-            if (hadFrontMatter && needsCanonicalRewrite(text, meta, content)) {
-              await fs.writeFile(
-                filePath,
-                serializePageFile(meta, content),
-                'utf8'
-              );
+            if (
+              hadFrontMatter &&
+              pageNeedsRewrite(loaded, ctx.metadataStorage)
+            ) {
+              await savePage(filePath, meta, content, {
+                storage: ctx.metadataStorage,
+                stampSyncHash: false,
+              });
               stats.tidied++;
-              out.appendLine(
-                `sync: ${relFilePath} unchanged; tidied front matter`
-              );
+              out.appendLine(`sync: ${relFilePath} unchanged; tidied metadata`);
             } else {
               stats.skipped++;
               out.appendLine(`sync: ${relFilePath} unchanged; skipped`);
@@ -1095,11 +1103,10 @@ async function syncFolder(
         try {
           const full = await getPage(ctx.url, token, page.id);
           await fs.mkdir(path.dirname(filePath), { recursive: true });
-          await fs.writeFile(
-            filePath,
-            serializeSynced(full, full.content),
-            'utf8'
-          );
+          await savePage(filePath, full, full.content, {
+            storage: ctx.metadataStorage,
+            stampSyncHash: true,
+          });
           out.appendLine(
             `sync: downloaded new page ${full.path} -> ${filePath}`
           );
@@ -1149,34 +1156,46 @@ async function syncFolder(
   );
 }
 
-// -- normalize front matter (local only, no network) --------------------
+// -- normalize metadata (local only, no network) --------------------
 
-// Rewrite every Markdown file under a folder so its front-matter block is the
-// canonical serialization of what it parses to — drops a stale `path:` line left
-// by an older version, drops unknown keys, fixes key order and stray blank
-// lines. The page body is left byte-for-byte. Touches nothing on the wiki;
-// needs no token or URL.
+// Rewrite every Markdown file under a folder so its metadata is in canonical
+// on-disk form for the folder's storage mode — in `frontmatter` mode: drops a
+// stale `path:` line, drops unknown keys, fixes key order and stray blank lines;
+// in `sidecar` mode: moves a leftover front-matter block into (or refreshes) the
+// `.wikisync.yaml` sidecar and leaves the `.md` as pure Markdown. Also migrates
+// files between the two modes. The page body is left byte-for-byte. Touches
+// nothing on the wiki; needs no token or URL.
 async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
   out.show(true);
   const folderPath = uri?.fsPath;
   if (!folderPath) {
     throw new Error(
-      'Right-click a folder in the Explorer to normalize its front matter.'
+      'Right-click a folder in the Explorer to normalize its metadata.'
     );
   }
+  const storage = await resolveMetadataStorage(folderPath);
 
   const files = await findMarkdownFiles(folderPath);
-  out.appendLine(`normalize: "${folderPath}" — ${files.length} file(s)`);
+  out.appendLine(
+    `normalize: "${folderPath}" — ${files.length} file(s), ${storage} mode`
+  );
   let tidied = 0;
   let clean = 0;
   let skipped = 0;
   for (const filePath of files) {
     const rel = path.relative(folderPath, filePath);
     try {
-      const text = await fs.readFile(filePath, 'utf8');
-      const { meta, content } = parsePageFile(text); // throws if no front matter
-      if (needsCanonicalRewrite(text, meta, content)) {
-        await fs.writeFile(filePath, serializePageFile(meta, content), 'utf8');
+      const loaded = await loadPage(filePath);
+      if (loaded.metaSource === 'none') {
+        skipped++;
+        out.appendLine(`normalize: skipped ${rel} (no metadata)`);
+        continue;
+      }
+      if (pageNeedsRewrite(loaded, storage)) {
+        await savePage(filePath, loaded.meta, loaded.content, {
+          storage,
+          stampSyncHash: false,
+        });
         tidied++;
         out.appendLine(`normalize: rewrote ${rel}`);
       } else {
@@ -1191,7 +1210,7 @@ async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
   const summary =
     `Wiki.js Sync: normalized "${folderPath}" — ${tidied} rewritten, ` +
     `${clean} already canonical` +
-    (skipped ? `, ${skipped} skipped (no front matter)` : '') +
+    (skipped ? `, ${skipped} skipped (no metadata)` : '') +
     '.';
   out.appendLine(summary);
   vscode.window.showInformationMessage(summary);
@@ -1407,6 +1426,7 @@ async function ensureLegalLocation(
   if (!(await vscode.workspace.applyEdit(edit))) {
     await fs.rename(filePath, target);
   }
+  await renameSidecar(filePath, target);
   out.appendLine(`renamed ${relFrom} -> ${relTo} (Wiki.js-legal path)`);
   return target;
 }
@@ -1482,11 +1502,10 @@ async function syncUploadLocked(
     filePath = legal;
   }
 
-  const text = await fs.readFile(filePath, 'utf8');
-  const { meta, content, hadFrontMatter } = parsePageFileLoose(text, filePath);
+  const { meta, content, hadFrontMatter } = await loadPage(filePath);
   if (!hadFrontMatter) {
     out.appendLine(
-      `note: ${filePath} had no front matter; generated defaults (title: "${meta.title}") for first upload`
+      `note: ${filePath} had no metadata; generated defaults (title: "${meta.title}") for first upload`
     );
   }
   // The page path is always the file's location relative to the sync root — it
@@ -1532,7 +1551,10 @@ async function syncUploadLocked(
   if (meta.id) {
     const updated = await updatePage(ctx.url, token, meta.id, meta, content);
     meta.updatedAt = updated.updatedAt;
-    await fs.writeFile(filePath, serializeSynced(meta, content), 'utf8');
+    await savePage(filePath, meta, content, {
+      storage: ctx.metadataStorage,
+      stampSyncHash: true,
+    });
     out.appendLine(`updated ${meta.path} (id ${meta.id})`);
     if (!opts.silent)
       vscode.window.setStatusBarMessage(`Wiki.js: updated ${meta.path}`, 3000);
@@ -1565,7 +1587,10 @@ async function syncUploadLocked(
     );
     meta.id = existing.id;
     meta.updatedAt = updated.updatedAt;
-    await fs.writeFile(filePath, serializeSynced(meta, content), 'utf8');
+    await savePage(filePath, meta, content, {
+      storage: ctx.metadataStorage,
+      stampSyncHash: true,
+    });
     out.appendLine(`updated ${meta.path} (id ${meta.id})`);
     if (!opts.silent)
       vscode.window.setStatusBarMessage(`Wiki.js: updated ${meta.path}`, 3000);
@@ -1574,7 +1599,10 @@ async function syncUploadLocked(
 
   meta.id = created.id;
   meta.updatedAt = created.updatedAt;
-  await fs.writeFile(filePath, serializeSynced(meta, content), 'utf8');
+  await savePage(filePath, meta, content, {
+    storage: ctx.metadataStorage,
+    stampSyncHash: true,
+  });
   out.appendLine(`created ${meta.path} (id ${meta.id})`);
   if (!opts.silent)
     vscode.window.setStatusBarMessage(`Wiki.js: created ${meta.path}`, 3000);
@@ -1588,7 +1616,11 @@ async function findMarkdownFiles(dir: string): Promise<string[]> {
 }
 
 async function findAssetFiles(dir: string): Promise<string[]> {
-  return walk(dir, (name) => !name.endsWith('.md') && name !== CONFIG_FILENAME);
+  return walk(
+    dir,
+    (name) =>
+      !name.endsWith('.md') && name !== CONFIG_FILENAME && !isSidecarName(name)
+  );
 }
 
 async function walk(

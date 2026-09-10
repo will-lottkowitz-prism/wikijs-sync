@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.13.0 — 2026-09-11
+
+- **Metadata can be kept in a sidecar file instead of front matter.** New
+  `wikijsSync.metadataStorage` setting (and a `"metadataStorage"` field in
+  `.wikisync.json`, per folder): `"frontmatter"` (default, unchanged) or
+  `"sidecar"`. In sidecar mode a page's `.md` file is **pure Markdown** — the
+  `id`, `title`, `tags`, `updatedAt`, `syncHash` and the rest live in a hidden
+  sibling `.<name>.md.wikisync.yaml`. Useful when the same `.md` files are also
+  published somewhere other than the wiki and shouldn't carry a block of sync
+  bookkeeping. Commit the `.wikisync.yaml` files alongside the `.md` files.
+  - Switching a folder's mode migrates each file the next time it syncs (no
+    network call, no page-history bump), or run **Normalize Metadata (Folder)**
+    to convert a whole tree offline.
+  - Sidecars are renamed/moved automatically when their `.md` is renamed or
+    moved in the Explorer, and are skipped by the folder walk and asset upload.
+- **"Normalize Front Matter (Folder)" is now "Normalize Metadata (Folder)"** and
+  is storage-mode aware (it also migrates files between the two modes).
+
+
 ## 0.12.0 — 2026-09-09
 
 - **Symlinked pages and folders are followed when syncing a folder.**

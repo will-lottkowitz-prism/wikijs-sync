@@ -3,6 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import { normalizeWikiPath } from './pathmap';
+import { MetadataStorage } from './sidecar';
+
+export { MetadataStorage } from './sidecar';
 
 /**
  * In-folder config file. Drop one in (say) a project's `docs/` folder to map
@@ -37,6 +40,14 @@ export interface WikiSyncFile {
   include?: string[];
   /** Ignorelist: files matching one of these globs never sync. */
   exclude?: string[];
+  /**
+   * Where per-page sync metadata is kept for this subtree. Overrides the
+   * `wikijsSync.metadataStorage` setting.
+   *  - 'frontmatter' (default): a `---` YAML block at the top of each `.md`.
+   *  - 'sidecar': a hidden sibling `.<name>.md.wikisync.yaml`, leaving the `.md`
+   *    as pure Markdown.
+   */
+  metadataStorage?: MetadataStorage;
 }
 
 export type AutoRenameMode = 'prompt' | 'auto' | 'off';
@@ -49,6 +60,7 @@ export interface WikiSyncSettings {
   defaultAssets: boolean;
   defaultExclude: string[];
   autoRenameIllegalPaths: AutoRenameMode;
+  metadataStorage: MetadataStorage;
 }
 
 export interface SyncContext {
@@ -68,6 +80,8 @@ export interface SyncContext {
   configPath?: string;
   /** Token from the `.wikisync.json`, if it set one. */
   fileToken?: string;
+  /** Where per-page sync metadata is stored for this subtree. */
+  metadataStorage: MetadataStorage;
 }
 
 export function getSettings(): WikiSyncSettings {
@@ -86,6 +100,7 @@ export function getSettings(): WikiSyncSettings {
       'autoRenameIllegalPaths',
       'prompt'
     ),
+    metadataStorage: cfg.get<MetadataStorage>('metadataStorage', 'frontmatter'),
   };
 }
 
@@ -172,6 +187,7 @@ export async function resolveContext(
       exclude: file.exclude ?? settings.defaultExclude,
       configPath,
       fileToken: file.token?.trim() || undefined,
+      metadataStorage: file.metadataStorage ?? settings.metadataStorage,
     };
   }
 
@@ -219,7 +235,28 @@ function legacyContext(
     assets: settings.defaultAssets,
     include: undefined,
     exclude: settings.defaultExclude,
+    metadataStorage: settings.metadataStorage,
   };
+}
+
+/**
+ * Just the metadata-storage mode for a path — the nearest `.wikisync.json`'s
+ * `metadataStorage`, else the setting. Unlike `resolveContext` this needs no
+ * wiki URL, so the offline **Normalize Metadata** command can use it.
+ */
+export async function resolveMetadataStorage(
+  fsPath: string
+): Promise<MetadataStorage> {
+  const configPath = findConfigFile(fsPath);
+  if (configPath) {
+    try {
+      const file = await readConfigFile(configPath);
+      if (file.metadataStorage) return file.metadataStorage;
+    } catch {
+      /* unreadable / invalid — fall back to the setting */
+    }
+  }
+  return getSettings().metadataStorage;
 }
 
 /** Resolve the API token: `.wikisync.json` > SecretStorage > `wikijsSync.token` setting. */
