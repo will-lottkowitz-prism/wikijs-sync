@@ -37,8 +37,8 @@
     },
     "metadataStorage": {
       "type": "string",
-      "enum": ["frontmatter", "sidecar"],
-      "description": "Where per-page sync metadata is kept for this folder. \"frontmatter\" (default): a --- YAML block at the top of each .md. \"sidecar\": a hidden sibling file .<name>.md.wikisync.yaml, leaving the .md as pure Markdown for publishing elsewhere. Overrides the wikijsSync.metadataStorage setting. Commit the sidecar files alongside the .md files.",
+      "enum": ["frontmatter", "sidecar", "single-file"],
+      "description": "Where per-page sync metadata is kept for this folder. \"frontmatter\" (default): a --- YAML block at the top of each .md. \"sidecar\": a hidden sibling file .<name>.md.wikisync.yaml, leaving the .md as pure Markdown for publishing elsewhere. \"single-file\": one .wikijs.metadata.json next to this .wikisync.json holding every page's metadata, with the .md files pure Markdown and no per-page dotfiles. Overrides the wikijsSync.metadataStorage setting. Commit the sidecar / metadata files alongside the .md files.",
       "default": "frontmatter"
     }
   }

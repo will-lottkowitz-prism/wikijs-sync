@@ -2,7 +2,7 @@
   "name": "wikijs-sync",
   "displayName": "Wiki.js Sync",
   "description": "Download and upload Wiki.js pages as local Markdown files, SFTP-style, with an upload-on-save option.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "publisher": "xQx",
   "license": "MIT",
   "author": {
@@ -99,15 +99,17 @@
           "type": "string",
           "enum": [
             "frontmatter",
-            "sidecar"
+            "sidecar",
+            "single-file"
           ],
           "enumDescriptions": [
             "A --- YAML front-matter block at the top of each .md file (the default).",
-            "A hidden sibling file (.<name>.md.wikisync.yaml), leaving the .md as pure Markdown."
+            "A hidden sibling file per page (.<name>.md.wikisync.yaml), leaving the .md as pure Markdown.",
+            "One .wikijs.metadata.json at the sync root holding every page's metadata, leaving the .md files as pure Markdown."
           ],
           "default": "frontmatter",
           "order": 8,
-          "markdownDescription": "Where the per-page sync metadata (`id`, `title`, `description`, `tags`, `updatedAt`, `syncHash`, …) is kept.\n\n- `frontmatter` (default): a `---` YAML block at the top of every `.md`.\n- `sidecar`: a hidden sibling file `.<name>.md.wikisync.yaml`, so the `.md` itself is just Markdown — useful when the same files are also published somewhere other than the wiki. Commit the sidecar files alongside the `.md` files.\n\nOverride per folder with `\"metadataStorage\"` in a `.wikisync.json`. Switching modes migrates each file the next time it syncs — or run **Wiki.js Sync: Normalize Metadata (Folder)** to convert a whole tree offline."
+          "markdownDescription": "Where the per-page sync metadata (`id`, `title`, `description`, `tags`, `updatedAt`, `syncHash`, …) is kept.\n\n- `frontmatter` (default): a `---` YAML block at the top of every `.md`.\n- `sidecar`: a hidden sibling file `.<name>.md.wikisync.yaml`, so the `.md` itself is just Markdown — useful when the same files are also published somewhere other than the wiki. Commit the sidecar files alongside the `.md` files.\n- `single-file`: one `.wikijs.metadata.json` at the sync root (the folder holding the `.wikisync.json`) with an entry per page, so the `.md` files are just Markdown *and* there are no per-page dotfiles. Commit it.\n\nIn every mode only fields that differ from their computed default are stored — a title that is just the page's `# Heading` or filename, `markdown`/`en`, published, public, no tags — so those follow the file when it is renamed. Renaming or moving a `.md` (or a folder of them) in the Explorer carries its metadata along.\n\nOverride per folder with `\"metadataStorage\"` in a `.wikisync.json`. Switching modes migrates each file the next time it syncs — or run **Wiki.js Sync: Normalize Metadata (Folder)** to convert a whole tree offline."
         },
         "wikijsSync.autoUpdate": {
           "type": "string",

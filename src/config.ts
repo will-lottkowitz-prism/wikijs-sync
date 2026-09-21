@@ -3,9 +3,17 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import { normalizeWikiPath } from './pathmap';
-import { MetadataStorage } from './sidecar';
+import { METADATA_STORAGE_MODES, MetadataStorage } from './pageFile';
 
-export { MetadataStorage } from './sidecar';
+export { MetadataStorage } from './pageFile';
+
+// A hand-typed setting or config value that isn't a known mode falls back to the
+// default rather than silently selecting some other layout.
+function coerceStorage(value: unknown): MetadataStorage {
+  return METADATA_STORAGE_MODES.includes(value as MetadataStorage)
+    ? (value as MetadataStorage)
+    : 'frontmatter';
+}
 
 /**
  * In-folder config file. Drop one in (say) a project's `docs/` folder to map
@@ -46,6 +54,8 @@ export interface WikiSyncFile {
    *  - 'frontmatter' (default): a `---` YAML block at the top of each `.md`.
    *  - 'sidecar': a hidden sibling `.<name>.md.wikisync.yaml`, leaving the `.md`
    *    as pure Markdown.
+   *  - 'single-file': one `.wikijs.metadata.json` next to this file holding the
+   *    metadata for every page beneath it; the `.md` files stay pure Markdown.
    */
   metadataStorage?: MetadataStorage;
 }
@@ -100,7 +110,7 @@ export function getSettings(): WikiSyncSettings {
       'autoRenameIllegalPaths',
       'prompt'
     ),
-    metadataStorage: cfg.get<MetadataStorage>('metadataStorage', 'frontmatter'),
+    metadataStorage: coerceStorage(cfg.get('metadataStorage', 'frontmatter')),
   };
 }
 
@@ -187,7 +197,10 @@ export async function resolveContext(
       exclude: file.exclude ?? settings.defaultExclude,
       configPath,
       fileToken: file.token?.trim() || undefined,
-      metadataStorage: file.metadataStorage ?? settings.metadataStorage,
+      metadataStorage:
+        file.metadataStorage === undefined
+          ? settings.metadataStorage
+          : coerceStorage(file.metadataStorage),
     };
   }
 
@@ -211,6 +224,12 @@ export function resolveLegacyContext(
   return legacyContext(fsPath, getSettings());
 }
 
+function contentDirFor(wsRoot: string, settings: WikiSyncSettings): string {
+  return path.isAbsolute(settings.contentDir)
+    ? settings.contentDir
+    : path.join(wsRoot, settings.contentDir);
+}
+
 function legacyContext(
   fsPath: string,
   settings: WikiSyncSettings
@@ -224,12 +243,9 @@ function legacyContext(
   if (!wsRoot) {
     throw new Error('Open a workspace folder before using Wiki.js Sync.');
   }
-  const contentDir = path.isAbsolute(settings.contentDir)
-    ? settings.contentDir
-    : path.join(wsRoot, settings.contentDir);
 
   return {
-    root: contentDir,
+    root: contentDirFor(wsRoot, settings),
     wikiPath: '',
     url: settings.url,
     assets: settings.defaultAssets,
@@ -240,23 +256,35 @@ function legacyContext(
 }
 
 /**
- * Just the metadata-storage mode for a path — the nearest `.wikisync.json`'s
- * `metadataStorage`, else the setting. Unlike `resolveContext` this needs no
- * wiki URL, so the offline **Normalize Metadata** command can use it.
+ * Just the metadata storage mode and sync root for a path — the nearest
+ * `.wikisync.json` (its `metadataStorage`, else the setting; its folder as the
+ * root), else the legacy content dir. Unlike `resolveContext` this needs no wiki
+ * URL, so the offline **Normalize Metadata** command and the rename handler can
+ * use it. `undefined` when there is no workspace folder to anchor to.
  */
-export async function resolveMetadataStorage(
+export async function resolveMetadataLocation(
   fsPath: string
-): Promise<MetadataStorage> {
+): Promise<{ storage: MetadataStorage; root: string } | undefined> {
+  const settings = getSettings();
   const configPath = findConfigFile(fsPath);
   if (configPath) {
+    let storage = settings.metadataStorage;
     try {
       const file = await readConfigFile(configPath);
-      if (file.metadataStorage) return file.metadataStorage;
+      if (file.metadataStorage !== undefined) {
+        storage = coerceStorage(file.metadataStorage);
+      }
     } catch {
       /* unreadable / invalid — fall back to the setting */
     }
+    return { storage, root: path.dirname(configPath) };
   }
-  return getSettings().metadataStorage;
+  const wsRoot = workspaceRootFor(fsPath);
+  if (!wsRoot) return undefined;
+  return {
+    storage: settings.metadataStorage,
+    root: contentDirFor(wsRoot, settings),
+  };
 }
 
 /** Resolve the API token: `.wikisync.json` > SecretStorage > `wikijsSync.token` setting. */

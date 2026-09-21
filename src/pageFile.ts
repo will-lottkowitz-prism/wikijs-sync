@@ -22,7 +22,30 @@ export interface PageMeta {
   syncHash?: string;
 }
 
-const FRONT_MATTER_RE = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+// Where a page's sync metadata is kept:
+//  - 'frontmatter' (default): a `---` YAML block at the top of the `.md` file.
+//  - 'sidecar': a hidden sibling file per page, leaving the `.md` as pure
+//    Markdown so it stays clean when the same file is also published somewhere
+//    other than the wiki.
+//  - 'single-file': one `.wikijs.metadata.json` at the sync root holding the
+//    metadata for every page beneath it (see `centralStore.ts`).
+export type MetadataStorage = 'frontmatter' | 'sidecar' | 'single-file';
+
+export const METADATA_STORAGE_MODES: readonly MetadataStorage[] = [
+  'frontmatter',
+  'sidecar',
+  'single-file',
+];
+
+// A block that is either empty (`---` straight into `---`, which is what a page
+// whose every field is default and has never synced serializes to) or holds at
+// least one line.
+const FRONT_MATTER_RE = /^---\n(?:---\n|([\s\S]*?)\n---\n)([\s\S]*)$/;
+
+/** True when `text` opens with a `---` front-matter block. */
+export function hasFrontMatter(text: string): boolean {
+  return FRONT_MATTER_RE.test(text.replace(/\r\n/g, '\n'));
+}
 
 function yamlStr(value: string): string {
   const v = value ?? '';
@@ -44,30 +67,143 @@ function yamlUnstr(value: string): string {
   return v;
 }
 
+// -- default-omitting metadata --------------------------------------------
+//
+// Every storage mode writes only the fields that differ from what the extension
+// would compute for the file anyway (`defaultMetaForFile`: title from the first
+// `# Heading` or the filename, no description, `markdown`/`en`, published,
+// public, no tags). A field that is at its default is simply absent, so it keeps
+// following the file — rename a page's file and its default title moves with
+// it, with nothing on disk to go stale. `id`, `updatedAt` and `syncHash` are
+// bookkeeping with no default, so they are stored whenever they are known.
+
+/** The stored (non-default) subset of a PageMeta, with `path` never included. */
+export interface MetaFields {
+  id?: number;
+  title?: string;
+  description?: string;
+  editor?: string;
+  locale?: string;
+  isPublished?: boolean;
+  isPrivate?: boolean;
+  tags?: string[];
+  updatedAt?: string;
+  syncHash?: string;
+}
+
+const sameTags = (a: string[], b: string[]): boolean =>
+  a.length === b.length && a.every((t, i) => t === b[i]);
+
+/** The fields of `meta` that differ from `defaults`, in canonical key order. */
+export function nonDefaultFields(
+  meta: PageMeta,
+  defaults: PageMeta
+): MetaFields {
+  const f: MetaFields = {};
+  if (meta.id !== undefined) f.id = meta.id;
+  if (meta.title !== defaults.title) f.title = meta.title;
+  if (meta.description !== defaults.description)
+    f.description = meta.description;
+  if (meta.editor !== defaults.editor) f.editor = meta.editor;
+  if (meta.locale !== defaults.locale) f.locale = meta.locale;
+  if (meta.isPublished !== defaults.isPublished)
+    f.isPublished = meta.isPublished;
+  if (meta.isPrivate !== defaults.isPrivate) f.isPrivate = meta.isPrivate;
+  if (!sameTags(meta.tags, defaults.tags)) f.tags = [...meta.tags];
+  if (meta.updatedAt) f.updatedAt = meta.updatedAt;
+  if (meta.syncHash) f.syncHash = meta.syncHash;
+  return f;
+}
+
+/** Stored fields re-laid-out in canonical key order, for stable comparison. */
+export function orderFields(f: MetaFields): MetaFields {
+  const o: MetaFields = {};
+  if (f.id !== undefined) o.id = f.id;
+  if (f.title !== undefined) o.title = f.title;
+  if (f.description !== undefined) o.description = f.description;
+  if (f.editor !== undefined) o.editor = f.editor;
+  if (f.locale !== undefined) o.locale = f.locale;
+  if (f.isPublished !== undefined) o.isPublished = f.isPublished;
+  if (f.isPrivate !== undefined) o.isPrivate = f.isPrivate;
+  if (f.tags !== undefined) o.tags = f.tags;
+  if (f.updatedAt !== undefined) o.updatedAt = f.updatedAt;
+  if (f.syncHash !== undefined) o.syncHash = f.syncHash;
+  return o;
+}
+
+export function sameFields(a: MetaFields, b: MetaFields): boolean {
+  return JSON.stringify(orderFields(a)) === JSON.stringify(orderFields(b));
+}
+
+/** Coerce untrusted parsed JSON into MetaFields, dropping anything mistyped. */
+export function sanitizeFields(raw: unknown): MetaFields {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const r = raw as Record<string, unknown>;
+  const f: MetaFields = {};
+  if (typeof r.id === 'number' && Number.isFinite(r.id)) f.id = r.id;
+  if (typeof r.title === 'string') f.title = r.title;
+  if (typeof r.description === 'string') f.description = r.description;
+  if (typeof r.editor === 'string' && r.editor) f.editor = r.editor;
+  if (typeof r.locale === 'string' && r.locale) f.locale = r.locale;
+  if (typeof r.isPublished === 'boolean') f.isPublished = r.isPublished;
+  if (typeof r.isPrivate === 'boolean') f.isPrivate = r.isPrivate;
+  if (Array.isArray(r.tags) && r.tags.every((t) => typeof t === 'string'))
+    f.tags = r.tags as string[];
+  if (typeof r.updatedAt === 'string' && r.updatedAt) f.updatedAt = r.updatedAt;
+  if (typeof r.syncHash === 'string' && r.syncHash) f.syncHash = r.syncHash;
+  return orderFields(f);
+}
+
+/** A full PageMeta from stored fields, every absent field taking its default. */
+export function metaFromFields(f: MetaFields, defaults: PageMeta): PageMeta {
+  return {
+    id: f.id,
+    title: f.title ?? defaults.title,
+    description: f.description ?? defaults.description,
+    path: '',
+    editor: f.editor ?? defaults.editor,
+    locale: f.locale ?? defaults.locale,
+    isPublished: f.isPublished ?? defaults.isPublished,
+    isPrivate: f.isPrivate ?? defaults.isPrivate,
+    tags: f.tags ? [...f.tags] : [...defaults.tags],
+    updatedAt: f.updatedAt,
+    syncHash: f.syncHash,
+  };
+}
+
 // The `key: value` metadata lines shared by the front-matter block and the
-// sidecar file (see `sidecar.ts`). No `---` fences, no trailing newline.
-export function serializeMetaLines(meta: PageMeta): string[] {
-  const lines = [
-    `id: ${meta.id ?? ''}`,
-    `title: ${yamlStr(meta.title)}`,
-    `description: ${yamlStr(meta.description)}`,
-    `editor: ${meta.editor}`,
-    `locale: ${meta.locale}`,
-    `isPublished: ${meta.isPublished}`,
-    `isPrivate: ${meta.isPrivate}`,
-    `tags: [${meta.tags.map(yamlStr).join(', ')}]`,
-  ];
-  if (meta.updatedAt) {
-    lines.push(`updatedAt: ${meta.updatedAt}`);
-  }
-  if (meta.syncHash) {
-    lines.push(`syncHash: ${meta.syncHash}`);
-  }
+// sidecar file (see `sidecar.ts`). No `---` fences, no trailing newline. Only
+// non-default fields are emitted.
+export function serializeMetaLines(
+  meta: PageMeta,
+  defaults: PageMeta
+): string[] {
+  const f = nonDefaultFields(meta, defaults);
+  const lines: string[] = [];
+  if (f.id !== undefined) lines.push(`id: ${f.id}`);
+  if (f.title !== undefined) lines.push(`title: ${yamlStr(f.title)}`);
+  if (f.description !== undefined)
+    lines.push(`description: ${yamlStr(f.description)}`);
+  if (f.editor !== undefined) lines.push(`editor: ${f.editor}`);
+  if (f.locale !== undefined) lines.push(`locale: ${f.locale}`);
+  if (f.isPublished !== undefined) lines.push(`isPublished: ${f.isPublished}`);
+  if (f.isPrivate !== undefined) lines.push(`isPrivate: ${f.isPrivate}`);
+  if (f.tags !== undefined)
+    lines.push(`tags: [${f.tags.map(yamlStr).join(', ')}]`);
+  if (f.updatedAt !== undefined) lines.push(`updatedAt: ${f.updatedAt}`);
+  if (f.syncHash !== undefined) lines.push(`syncHash: ${f.syncHash}`);
   return lines;
 }
 
-export function serializePageFile(meta: PageMeta, content: string): string {
-  return ['---', ...serializeMetaLines(meta), '---', ''].join('\n') + content;
+// `filePath` + `content` are what the defaults are computed from, so the same
+// pair must be used when the file is read back (parsePageFile does).
+export function serializePageFile(
+  meta: PageMeta,
+  content: string,
+  filePath: string
+): string {
+  const lines = serializeMetaLines(meta, defaultMetaForFile(filePath, content));
+  return ['---', ...lines, '---', ''].join('\n') + content;
 }
 
 // A stable fingerprint of the parts of a page that get pushed to Wiki.js — the
@@ -94,10 +230,15 @@ export function pageDigest(meta: PageMeta, content: string): string {
 // Serialize a file that is now in sync with the server: stamps a fresh syncHash
 // so the next folder sync recognises an untouched file and skips it. meta
 // should already carry the server's latest updatedAt.
-export function serializeSynced(meta: PageMeta, content: string): string {
+export function serializeSynced(
+  meta: PageMeta,
+  content: string,
+  filePath: string
+): string {
   return serializePageFile(
     { ...meta, syncHash: pageDigest(meta, content) },
-    content
+    content,
+    filePath
   );
 }
 
@@ -110,10 +251,12 @@ export function serializeSynced(meta: PageMeta, content: string): string {
 export function needsCanonicalRewrite(
   originalText: string,
   meta: PageMeta,
-  content: string
+  content: string,
+  filePath: string
 ): boolean {
   return (
-    originalText.replace(/\r\n/g, '\n') !== serializePageFile(meta, content)
+    originalText.replace(/\r\n/g, '\n') !==
+    serializePageFile(meta, content, filePath)
   );
 }
 
@@ -162,7 +305,10 @@ export function defaultMetaForFile(
   };
 }
 
-export function parsePageFile(text: string): {
+export function parsePageFile(
+  text: string,
+  filePath = ''
+): {
   meta: PageMeta;
   content: string;
 } {
@@ -177,15 +323,24 @@ export function parsePageFile(text: string): {
     );
   }
   const [, front, content] = m;
-  return { meta: parseMetaFromLines(front), content };
+  return {
+    meta: parseMetaFromLines(
+      front ?? '',
+      defaultMetaForFile(filePath, content)
+    ),
+    content,
+  };
 }
 
 // Parse the `key: value` lines of a metadata block — a front-matter block or a
 // sidecar file — into a PageMeta. Blank lines, `#` comment lines and lines with
-// no `:` are ignored. `path` is never read here: it is derived from the file's
-// location by the caller, and a stale `path:` line left by an older version is
-// dropped.
-export function parseMetaFromLines(block: string): PageMeta {
+// no `:` are ignored. A key that is absent takes its value from `defaults`.
+// `path` is never read here: it is derived from the file's location by the
+// caller, and a stale `path:` line left by an older version is dropped.
+export function parseMetaFromLines(
+  block: string,
+  defaults: PageMeta
+): PageMeta {
   const raw: Record<string, string> = {};
   for (const line of block.replace(/\r\n/g, '\n').split('\n')) {
     if (/^\s*#/.test(line)) continue;
@@ -194,24 +349,32 @@ export function parseMetaFromLines(block: string): PageMeta {
     raw[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
   }
 
-  let tags: string[] = [];
-  const tagsRaw = (raw.tags ?? '[]').trim();
-  if (tagsRaw.startsWith('[') && tagsRaw.endsWith(']')) {
-    const inner = tagsRaw.slice(1, -1).trim();
-    if (inner) {
-      tags = inner.split(',').map((t) => yamlUnstr(t));
+  let tags = [...defaults.tags];
+  if (raw.tags !== undefined) {
+    tags = [];
+    const tagsRaw = raw.tags.trim();
+    if (tagsRaw.startsWith('[') && tagsRaw.endsWith(']')) {
+      const inner = tagsRaw.slice(1, -1).trim();
+      if (inner) {
+        tags = inner.split(',').map((t) => yamlUnstr(t));
+      }
     }
   }
+  const bool = (v: string | undefined, dflt: boolean): boolean =>
+    v === undefined || v === '' ? dflt : v.toLowerCase() === 'true';
 
   return {
     id: raw.id ? Number(raw.id) : undefined,
-    title: yamlUnstr(raw.title ?? ''),
-    description: yamlUnstr(raw.description ?? ''),
+    title: raw.title !== undefined ? yamlUnstr(raw.title) : defaults.title,
+    description:
+      raw.description !== undefined
+        ? yamlUnstr(raw.description)
+        : defaults.description,
     path: '',
-    editor: raw.editor || 'markdown',
-    locale: raw.locale || 'en',
-    isPublished: (raw.isPublished ?? 'true').toLowerCase() === 'true',
-    isPrivate: (raw.isPrivate ?? 'false').toLowerCase() === 'true',
+    editor: raw.editor || defaults.editor,
+    locale: raw.locale || defaults.locale,
+    isPublished: bool(raw.isPublished, defaults.isPublished),
+    isPrivate: bool(raw.isPrivate, defaults.isPrivate),
     tags,
     updatedAt: raw.updatedAt || undefined,
     syncHash: raw.syncHash || undefined,

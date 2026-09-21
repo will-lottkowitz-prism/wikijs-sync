@@ -16,11 +16,13 @@ import {
 } from './wikijsClient';
 import { pageDigest, sameInstant } from './pageFile';
 import {
+  MetaLocation,
   loadPage,
   pageNeedsRewrite,
-  renameSidecar,
+  relocateMetadata,
   savePage,
 } from './pageStore';
+import { pruneCentralOrphans } from './centralStore';
 import { isSidecarName } from './sidecar';
 import {
   AutoRenameMode,
@@ -35,7 +37,7 @@ import {
   pagePathForFile,
   resolveContext,
   resolveLegacyContext,
-  resolveMetadataStorage,
+  resolveMetadataLocation,
   resolveToken,
 } from './config';
 
@@ -110,6 +112,11 @@ function pagesUnder<T extends { path: string }>(
   );
 }
 
+// Where a page's metadata is stored, for the context it syncs under.
+function metaLoc(ctx: SyncContext): MetaLocation {
+  return { storage: ctx.metadataStorage, root: ctx.root };
+}
+
 // -- registration -----------------------------------------------------------
 
 export function registerCommands(context: vscode.ExtensionContext) {
@@ -163,15 +170,10 @@ export function registerCommands(context: vscode.ExtensionContext) {
       (uri?: vscode.Uri) => guarded(() => normalizeFolder(out, uri))
     ),
     vscode.workspace.onDidSaveTextDocument((doc) => onSave(context, out, doc)),
-    // Keep a page's metadata sidecar with its `.md` when the file is renamed or
-    // moved in the Explorer (the plugin's own illegal-path rename handles itself).
-    vscode.workspace.onDidRenameFiles((e) => {
-      for (const { oldUri, newUri } of e.files) {
-        if (oldUri.fsPath.endsWith('.md') && newUri.fsPath.endsWith('.md')) {
-          void renameSidecar(oldUri.fsPath, newUri.fsPath);
-        }
-      }
-    }),
+    // Keep a page's metadata with it when a `.md` file or a folder of them is
+    // renamed or moved in the Explorer: sidecars follow their `.md`, and entries
+    // in `.wikijs.metadata.json` are re-keyed to the new path.
+    vscode.workspace.onDidRenameFiles((e) => onRenamed(out, e.files)),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('wikijsSync')) updateContentRootContext();
     }),
@@ -306,7 +308,7 @@ async function downloadAll(
         const filePath = fileForPagePath(ctx, full.path);
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await savePage(filePath, full, full.content, {
-          storage: ctx.metadataStorage,
+          ...metaLoc(ctx),
           stampSyncHash: true,
         });
         out.appendLine(`downloaded ${full.path} -> ${filePath}`);
@@ -336,7 +338,7 @@ async function pickAndDownload(
   const filePath = fileForPagePath(ctx, full.path);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await savePage(filePath, full, full.content, {
-    storage: ctx.metadataStorage,
+    ...metaLoc(ctx),
     stampSyncHash: true,
   });
   out.appendLine(`downloaded ${full.path} -> ${filePath}`);
@@ -354,7 +356,7 @@ async function downloadFileCommand(
   const ctx = await resolveContext(filePath);
   const token = await resolveToken(context, ctx);
 
-  const { meta } = await loadPage(filePath);
+  const { meta } = await loadPage(filePath, metaLoc(ctx));
   if (!meta.id) {
     throw new Error(
       `${filePath} has no page id yet (it was never uploaded). Use "Download Page..." to fetch by path instead.`
@@ -363,7 +365,7 @@ async function downloadFileCommand(
 
   const full = await getPage(ctx.url, token, meta.id);
   await savePage(filePath, full, full.content, {
-    storage: ctx.metadataStorage,
+    ...metaLoc(ctx),
     stampSyncHash: true,
   });
   out.appendLine(
@@ -871,7 +873,7 @@ async function downloadFolder(
           const full = await getPage(ctx.url, token, page.id);
           await fs.mkdir(path.dirname(filePath), { recursive: true });
           await savePage(filePath, full, full.content, {
-            storage: ctx.metadataStorage,
+            ...metaLoc(ctx),
             stampSyncHash: true,
           });
           out.appendLine(`download: ${full.path} -> ${filePath}`);
@@ -950,7 +952,7 @@ async function syncFolder(
         const filePath = legal;
         const relFilePath = path.relative(folderPath, filePath);
 
-        const loaded = await loadPage(filePath);
+        const loaded = await loadPage(filePath, metaLoc(ctx));
         const { meta, content, hadFrontMatter } = loaded;
         if (!hadFrontMatter) {
           out.appendLine(
@@ -981,7 +983,7 @@ async function syncFolder(
         const pullRemote = async (id: number, note: string) => {
           const full = await getPage(ctx.url, token, id);
           await savePage(filePath, full, full.content, {
-            storage: ctx.metadataStorage,
+            ...metaLoc(ctx),
             stampSyncHash: true,
           });
           out.appendLine(
@@ -1054,7 +1056,7 @@ async function syncFolder(
               pageNeedsRewrite(loaded, ctx.metadataStorage)
             ) {
               await savePage(filePath, meta, content, {
-                storage: ctx.metadataStorage,
+                ...metaLoc(ctx),
                 stampSyncHash: false,
               });
               stats.tidied++;
@@ -1104,7 +1106,7 @@ async function syncFolder(
           const full = await getPage(ctx.url, token, page.id);
           await fs.mkdir(path.dirname(filePath), { recursive: true });
           await savePage(filePath, full, full.content, {
-            storage: ctx.metadataStorage,
+            ...metaLoc(ctx),
             stampSyncHash: true,
           });
           out.appendLine(
@@ -1160,11 +1162,13 @@ async function syncFolder(
 
 // Rewrite every Markdown file under a folder so its metadata is in canonical
 // on-disk form for the folder's storage mode — in `frontmatter` mode: drops a
-// stale `path:` line, drops unknown keys, fixes key order and stray blank lines;
-// in `sidecar` mode: moves a leftover front-matter block into (or refreshes) the
-// `.wikisync.yaml` sidecar and leaves the `.md` as pure Markdown. Also migrates
-// files between the two modes. The page body is left byte-for-byte. Touches
-// nothing on the wiki; needs no token or URL.
+// stale `path:` line, unknown keys and any field that is just its default, fixes
+// key order and stray blank lines; in `sidecar` mode: moves a leftover
+// front-matter block into (or refreshes) the `.wikisync.yaml` sidecar and leaves
+// the `.md` as pure Markdown; in `single-file` mode: moves everything into the
+// root's `.wikijs.metadata.json` (and prunes entries whose page file is gone).
+// Also migrates files between the modes. The page body is left byte-for-byte.
+// Touches nothing on the wiki; needs no token or URL.
 async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
   out.show(true);
   const folderPath = uri?.fsPath;
@@ -1173,7 +1177,11 @@ async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
       'Right-click a folder in the Explorer to normalize its metadata.'
     );
   }
-  const storage = await resolveMetadataStorage(folderPath);
+  const loc = await resolveMetadataLocation(folderPath);
+  if (!loc) {
+    throw new Error('Open a workspace folder before using Wiki.js Sync.');
+  }
+  const { storage } = loc;
 
   const files = await findMarkdownFiles(folderPath);
   out.appendLine(
@@ -1185,7 +1193,7 @@ async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
   for (const filePath of files) {
     const rel = path.relative(folderPath, filePath);
     try {
-      const loaded = await loadPage(filePath);
+      const loaded = await loadPage(filePath, loc);
       if (loaded.metaSource === 'none') {
         skipped++;
         out.appendLine(`normalize: skipped ${rel} (no metadata)`);
@@ -1193,7 +1201,7 @@ async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
       }
       if (pageNeedsRewrite(loaded, storage)) {
         await savePage(filePath, loaded.meta, loaded.content, {
-          storage,
+          ...loc,
           stampSyncHash: false,
         });
         tidied++;
@@ -1207,10 +1215,17 @@ async function normalizeFolder(out: vscode.OutputChannel, uri?: vscode.Uri) {
     }
   }
 
+  let pruned = 0;
+  if (storage === 'single-file') {
+    pruned = await pruneCentralOrphans(loc.root, folderPath);
+    if (pruned) out.appendLine(`normalize: pruned ${pruned} orphaned entries`);
+  }
+
   const summary =
     `Wiki.js Sync: normalized "${folderPath}" — ${tidied} rewritten, ` +
     `${clean} already canonical` +
     (skipped ? `, ${skipped} skipped (no metadata)` : '') +
+    (pruned ? `, ${pruned} orphaned entries pruned` : '') +
     '.';
   out.appendLine(summary);
   vscode.window.showInformationMessage(summary);
@@ -1239,6 +1254,47 @@ async function onSave(
   await guarded(async () => {
     await syncUpload(context, out, ctx, doc.fileName, { silent: true });
   });
+}
+
+// -- rename / move follow-through ------------------------------------------
+
+// A `.md` (or a folder of them) was renamed or moved in the editor: carry its
+// metadata along. Best effort by design — a failure here must never surface as
+// an error on someone's drag-and-drop, and the next sync recovers what it can.
+async function onRenamed(
+  out: vscode.OutputChannel,
+  files: readonly { oldUri: vscode.Uri; newUri: vscode.Uri }[]
+) {
+  for (const { oldUri, newUri } of files) {
+    const oldPath = oldUri.fsPath;
+    const newPath = newUri.fsPath;
+    try {
+      let isDir: boolean;
+      try {
+        isDir = (await fs.stat(newPath)).isDirectory();
+      } catch {
+        continue; // gone again already
+      }
+      if (!isDir && !(oldPath.endsWith('.md') && newPath.endsWith('.md'))) {
+        continue;
+      }
+      const [oldLoc, newLoc] = await Promise.all([
+        resolveMetadataLocation(oldPath),
+        resolveMetadataLocation(newPath),
+      ]);
+      await relocateMetadata({
+        oldPath,
+        newPath,
+        isDir,
+        oldRoot: oldLoc?.root,
+        newLoc,
+      });
+    } catch (err: any) {
+      out.appendLine(
+        `rename: could not carry metadata for ${oldPath} -> ${newPath}: ${err?.message ?? err}`
+      );
+    }
+  }
 }
 
 // -- move / copy resolution ----------------------------------------------
@@ -1426,7 +1482,13 @@ async function ensureLegalLocation(
   if (!(await vscode.workspace.applyEdit(edit))) {
     await fs.rename(filePath, target);
   }
-  await renameSidecar(filePath, target);
+  await relocateMetadata({
+    oldPath: filePath,
+    newPath: target,
+    isDir: false,
+    oldRoot: ctx.root,
+    newLoc: metaLoc(ctx),
+  });
   out.appendLine(`renamed ${relFrom} -> ${relTo} (Wiki.js-legal path)`);
   return target;
 }
@@ -1502,7 +1564,10 @@ async function syncUploadLocked(
     filePath = legal;
   }
 
-  const { meta, content, hadFrontMatter } = await loadPage(filePath);
+  const { meta, content, hadFrontMatter } = await loadPage(
+    filePath,
+    metaLoc(ctx)
+  );
   if (!hadFrontMatter) {
     out.appendLine(
       `note: ${filePath} had no metadata; generated defaults (title: "${meta.title}") for first upload`
@@ -1552,7 +1617,7 @@ async function syncUploadLocked(
     const updated = await updatePage(ctx.url, token, meta.id, meta, content);
     meta.updatedAt = updated.updatedAt;
     await savePage(filePath, meta, content, {
-      storage: ctx.metadataStorage,
+      ...metaLoc(ctx),
       stampSyncHash: true,
     });
     out.appendLine(`updated ${meta.path} (id ${meta.id})`);
@@ -1588,7 +1653,7 @@ async function syncUploadLocked(
     meta.id = existing.id;
     meta.updatedAt = updated.updatedAt;
     await savePage(filePath, meta, content, {
-      storage: ctx.metadataStorage,
+      ...metaLoc(ctx),
       stampSyncHash: true,
     });
     out.appendLine(`updated ${meta.path} (id ${meta.id})`);
@@ -1600,7 +1665,7 @@ async function syncUploadLocked(
   meta.id = created.id;
   meta.updatedAt = created.updatedAt;
   await savePage(filePath, meta, content, {
-    storage: ctx.metadataStorage,
+    ...metaLoc(ctx),
     stampSyncHash: true,
   });
   out.appendLine(`created ${meta.path} (id ${meta.id})`);

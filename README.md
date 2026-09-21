@@ -53,6 +53,8 @@ wiki"*. It sets the wiki path the folder maps to, which files sync, and
   //   "frontmatter" (default) — a --- YAML block at the top of each .md
   //   "sidecar"               — a hidden .<name>.md.wikisync.yaml next to it,
   //                             leaving the .md as pure Markdown
+  //   "single-file"           — one .wikijs.metadata.json beside this file
+  //                             for every page under it; .md stay pure Markdown
   "metadataStorage": "frontmatter",
 
   // Per-folder API token override (optional). If you set this,
@@ -99,7 +101,7 @@ no single "content" mirror folder. Commit the `.wikisync.json` (without a
 Globs are gitignore-style: `*` within a path segment, `**` across segments,
 `?` a single character. `include` and `exclude` can be combined (exclude wins).
 Dotfiles and `node_modules` are always skipped — including the
-`.<name>.md.wikisync.yaml` metadata sidecars (see [Metadata storage](#metadata-storage)).
+`.<name>.md.wikisync.yaml` metadata sidecars and the `.wikijs.metadata.json` file (see [Metadata storage](#metadata-storage)).
 
 ### How local files map to wiki pages
 
@@ -128,7 +130,7 @@ Right-click in the Explorer, or the Command Palette (`Ctrl/Cmd+Shift+P` → "Wik
 | **Sync Folder with Wiki (Two-Way)** | Right-click a folder. For each local `.md`, a three-way compare against its last-synced state: unchanged on both sides → skipped; changed only locally → pushed; changed only on the server → pulled (so a web-UI edit is never clobbered); changed on **both** sides → prompt to pick a winner (with "Upload All" / "Download All" for a bulk reorg). Remote pages with no local file are downloaded. Eligible non-`.md` files upload as assets. |
 | **Upload Folder (Push Subtree)** | Right-click a folder. One-way push of every eligible `.md` (and asset) under it. Nothing is pulled. |
 | **Download Folder (Pull Subtree)** | Right-click a folder. One-way pull of every wiki page at or under the folder's mapped path, **overwriting local files**. Local-only files are left in place, not deleted. |
-| **Normalize Metadata (Folder)** | Right-click a folder. Rewrites every page so its metadata is in canonical on-disk form for the folder's [storage mode](#metadata-storage) — drops a stale `path:` line and unknown keys, fixes key order, and migrates files between front-matter and sidecar mode. Page bodies untouched. **Local only**: touches nothing on the wiki, needs no token or URL. |
+| **Normalize Metadata (Folder)** | Right-click a folder. Rewrites every page so its metadata is in canonical on-disk form for the folder's [storage mode](#metadata-storage) — drops a stale `path:` line and unknown keys, fixes key order, and migrates files between the three modes (and in `single-file` mode prunes entries whose page is gone). Page bodies untouched. **Local only**: touches nothing on the wiki, needs no token or URL. |
 | **Upload Asset** | Right-click a non-`.md` file. Under a synced folder its server location is derived automatically; elsewhere you pick the asset folder. Offers to copy / insert a Markdown link. |
 | **Download All Pages** / **Upload All Pages** / **Download Page…** | *Legacy whole-wiki mirror* — operate on `wikijsSync.contentDir` mapped to the wiki root. Shown only on the `contentDir` folder. Use the folder commands with `.wikisync.json` instead. |
 
@@ -146,7 +148,7 @@ saved (if it's inside a synced folder and passes that folder's include/exclude).
 | `wikijsSync.syncNonMarkdownAsAssets` | `true` | Default for a `.wikisync.json`'s `"assets"`. |
 | `wikijsSync.exclude` | `["**/.*", "**/node_modules/**"]` | Default ignore globs for folders that don't set their own `"exclude"` / `"include"`. |
 | `wikijsSync.autoRenameIllegalPaths` | `"prompt"` | When a file's location would produce a Wiki.js-illegal path: `prompt` (ask, with a "…All" button), `auto` (rename + log), `off` (skip + report). |
-| `wikijsSync.metadataStorage` | `"frontmatter"` | Where per-page sync metadata lives: `frontmatter` (a `---` block in each `.md`) or `sidecar` (a hidden `.<name>.md.wikisync.yaml`, leaving the `.md` pure Markdown). A `.wikisync.json` `"metadataStorage"` overrides it per folder. See [Metadata storage](#metadata-storage). |
+| `wikijsSync.metadataStorage` | `"frontmatter"` | Where per-page sync metadata lives: `frontmatter` (a `---` block in each `.md`), `sidecar` (a hidden `.<name>.md.wikisync.yaml` per page) or `single-file` (one `.wikijs.metadata.json` at the sync root) — the last two leave the `.md` pure Markdown. A `.wikisync.json` `"metadataStorage"` overrides it per folder. See [Metadata storage](#metadata-storage). |
 
 ## Page paths
 
@@ -170,58 +172,123 @@ doesn't fix `[links](/other/page.md)` in *other* files that point at the old nam
 
 ## Metadata storage
 
-By default each page's metadata is a YAML front matter block at the top of its
-`.md` file (see [Front matter](#front-matter) below). Set
-`wikijsSync.metadataStorage` to `"sidecar"` — globally, or per folder with
-`"metadataStorage": "sidecar"` in a `.wikisync.json` — and the metadata moves
-into a hidden sibling file instead, leaving the `.md` as **pure Markdown**:
+Each page's metadata (`id`, `title`, `tags`, `updatedAt`, `syncHash`, …) is kept
+in one of three places. Set `wikijsSync.metadataStorage` — globally, or per
+folder with `"metadataStorage"` in a `.wikisync.json`:
+
+| Mode | Where | The `.md` is |
+| --- | --- | --- |
+| `frontmatter` (default) | a `---` YAML block at the top of the `.md` (see [Front matter](#front-matter)) | Markdown + a block |
+| `sidecar` | a hidden sibling per page, `.<name>.md.wikisync.yaml` | pure Markdown |
+| `single-file` | one `.wikijs.metadata.json` at the sync root | pure Markdown |
+
+`sidecar` and `single-file` are for when the same `.md` files are also published
+somewhere other than the wiki (a static site, a repo README, a docs bundle) and
+shouldn't carry a block of sync bookkeeping at the top:
 
 ```
-docs/
-├── .wikisync.json
-├── intro.md                     ← just the Markdown body, no --- block
-├── .intro.md.wikisync.yaml      ← id, title, tags, updatedAt, syncHash, …
-└── guide/
-    ├── setup.md
+docs/                             docs/
+├── .wikisync.json                ├── .wikisync.json
+├── intro.md                      ├── .wikijs.metadata.json   ← every page's id, syncHash, …
+├── .intro.md.wikisync.yaml       ├── intro.md
+└── guide/                        └── guide/
+    ├── setup.md                      └── setup.md
     └── .setup.md.wikisync.yaml
+        sidecar                           single-file
 ```
 
-Use this when the same `.md` files are also published somewhere other than the
-wiki (a static site, a repo README, a docs bundle) and shouldn't carry a block
-of sync bookkeeping at the top.
+`single-file` keeps one JSON file per sync root (the folder holding the
+`.wikisync.json`; the `contentDir` in legacy mode) instead of a dotfile per page.
+Keys are each page's path relative to that file:
 
-- **Commit the `.wikisync.yaml` sidecars** alongside the `.md` files — they hold
-  the page `id` and sync state, so without them a re-sync can't tell an existing
-  page from a new one. They're hidden dotfiles but not git-ignored by default.
+```json
+{
+  "version": 1,
+  "pages": {
+    "guide/setup.md": { "id": 12, "updatedAt": "2026-09-19T01:02:03.000Z", "syncHash": "9f2c…" },
+    "intro.md": { "id": 3, "title": "Welcome", "tags": ["start"], "updatedAt": "…", "syncHash": "…" }
+  }
+}
+```
+
+### Only non-default values are stored
+
+In **every** mode a field is written only when it differs from what the
+extension would compute for the file anyway:
+
+| Field | Default |
+| --- | --- |
+| `title` | the first `# Heading` in the body, else the filename (`my-page.md` → `My Page`) |
+| `description` | empty |
+| `editor` / `locale` | `markdown` / `en` |
+| `isPublished` / `isPrivate` | `true` / `false` |
+| `tags` | none |
+
+`id`, `updatedAt` and `syncHash` have no default and are always stored. Because a
+default is *calculated* rather than stored, it updates by itself: rename
+`old-name.md` to `new-name.md` (or edit its heading) and a default title becomes
+`New Name` on the next sync with nothing to edit or migrate. A title you set to
+something else is stored and stays put. Files written by 0.13 and earlier, which
+spell every field out, are tidied to the short form the next time they sync.
+
+### Renaming and moving
+
+Renaming or moving a `.md` — or a whole folder of them — in the Explorer carries
+its metadata with it: a sidecar is renamed alongside its page, and
+`.wikijs.metadata.json` entries are re-keyed to the new path (across sync roots,
+or into the destination's own storage mode, if the move crosses one). A `mv` /
+`git mv` outside VS Code fires no event, so that page's metadata is left behind
+(front matter is unaffected — it's inside the file); **Normalize Metadata** prunes
+the orphaned `single-file` entries.
+
+### Notes
+
+- **Commit the metadata files** (`.wikisync.yaml` sidecars, `.wikijs.metadata.json`)
+  alongside the `.md` files — they hold the page `id` and sync state, so without
+  them a re-sync can't tell an existing page from a new one. They're hidden
+  dotfiles but not git-ignored by default.
 - The folder walk, asset upload and the default `exclude` all skip them.
-- Renaming or moving a `.md` in the Explorer moves its sidecar with it.
-- **Switching modes** (either direction) migrates each file the next time it
-  syncs — no network call, no page-history bump — or run **Normalize Metadata
-  (Folder)** to convert a whole tree at once, offline. If a `.md` ends up with
-  *both* a front-matter block and a sidecar, the sidecar wins and the block is
-  dropped from the body on the next write.
+- `.wikijs.metadata.json` is written atomically and is never overwritten while it
+  can't be parsed — fix or delete a corrupt one and the sync tells you so.
+- **Switching modes** (any direction) migrates each file the next time it syncs —
+  no network call, no page-history bump — or run **Normalize Metadata (Folder)**
+  to convert a whole tree at once, offline. If metadata is found in more than one
+  place, the configured mode's copy wins and the others are removed on the next
+  write.
 
 ## Front matter
 
 Each local file is Markdown with a YAML front matter block (in the default
 `frontmatter` [storage mode](#metadata-storage); in `sidecar` mode the same
-fields live in a `.wikisync.yaml` file instead):
+fields live in a `.wikisync.yaml` file instead, in `single-file` mode in
+`.wikijs.metadata.json`). Only [non-default fields](#only-non-default-values-are-stored)
+are written, so a typical page carries just:
 
 ```
 ---
 id: 3
-title: Page Title
-description: "..."
-editor: markdown
-locale: en
-isPublished: true
-isPrivate: false
-tags: [tag1, tag2]
 updatedAt: 2026-08-06T04:13:34.389Z
 syncHash: 9f2c…
 ---
 Page content starts here...
 ```
+
+and one that departs from the defaults also lists what differs:
+
+```
+---
+id: 3
+title: A Title That Isn't The Heading
+description: "..."
+tags: [tag1, tag2]
+isPrivate: true
+updatedAt: 2026-08-06T04:13:34.389Z
+syncHash: 9f2c…
+---
+```
+
+The full set of keys is `id`, `title`, `description`, `editor`, `locale`,
+`isPublished`, `isPrivate`, `tags`, `updatedAt`, `syncHash`.
 
 `updatedAt` is the conflict-detection anchor: before an upload updates an
 existing page, the extension compares the server's current `updatedAt` with the
@@ -242,8 +309,8 @@ Any upload path accepts a plain `.md` file with no `---` block. Metadata is
 generated: `title` from a leading `# Heading` (else the filename);
 `editor`/`locale`/`isPublished`/`isPrivate`/`tags` get defaults (`markdown`,
 `en`, `true`, `false`, `[]`); the page path comes from the file's location. The
-generated front matter is written back to the file once the page is created, so
-this only happens once per file.
+metadata is written back once the page is created (just the `id` and sync state,
+since everything else is a default), so this only happens once per file.
 
 ## Assets
 

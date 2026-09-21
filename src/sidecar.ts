@@ -1,13 +1,6 @@
 import * as path from 'path';
 import { PageMeta, parseMetaFromLines, serializeMetaLines } from './pageFile';
 
-// Where a page's sync metadata is kept:
-//  - 'frontmatter' (default): a `---` YAML block at the top of the `.md` file.
-//  - 'sidecar': a hidden sibling file, leaving the `.md` as pure Markdown so it
-//    stays clean when the same file is also published somewhere other than the
-//    wiki.
-export type MetadataStorage = 'frontmatter' | 'sidecar';
-
 // Sibling dotfile that holds a page's metadata in 'sidecar' mode:
 //   docs/guide/intro.md  ->  docs/guide/.intro.md.wikisync.yaml
 // The leading dot hides it and makes the folder walk / default excludes skip it;
@@ -30,18 +23,23 @@ const HEADER =
   '# Wiki.js Sync — page metadata kept out of the .md so the Markdown stays\n' +
   '# clean when published elsewhere. Managed by the extension; do not hand-edit.\n';
 
-export function serializeSidecar(meta: PageMeta): string {
-  return HEADER + serializeMetaLines(meta).join('\n') + '\n';
+// Only fields that differ from `defaults` (see `pageFile.ts`) are written.
+export function serializeSidecar(meta: PageMeta, defaults: PageMeta): string {
+  const lines = serializeMetaLines(meta, defaults);
+  return HEADER + lines.map((l) => l + '\n').join('');
 }
 
-export function parseSidecar(text: string): PageMeta {
-  return parseMetaFromLines(text);
+export function parseSidecar(text: string, defaults: PageMeta): PageMeta {
+  return parseMetaFromLines(text, defaults);
 }
 
 /** True when `sidecarText` already is the canonical serialization of `meta`. */
 export function sidecarIsCanonical(
   sidecarText: string,
-  meta: PageMeta
+  meta: PageMeta,
+  defaults: PageMeta
 ): boolean {
-  return sidecarText.replace(/\r\n/g, '\n') === serializeSidecar(meta);
+  return (
+    sidecarText.replace(/\r\n/g, '\n') === serializeSidecar(meta, defaults)
+  );
 }

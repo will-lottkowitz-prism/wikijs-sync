@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.14.0 — 2026-09-21
+
+- **New `single-file` metadata storage.** `wikijsSync.metadataStorage` (and
+  `"metadataStorage"` in `.wikisync.json`, per folder) now also accepts
+  `"single-file"`: one **`.wikijs.metadata.json`** at the sync root (the folder
+  holding the `.wikisync.json`; `contentDir` in legacy mode) holds the metadata
+  for every page beneath it, keyed by path relative to the file. The `.md` files
+  stay pure Markdown and there is no dotfile per page. Commit the file.
+  - Written atomically, edits serialized so concurrent saves can't drop an entry,
+    and never overwritten while it can't be parsed.
+  - **Normalize Metadata (Folder)** also prunes entries whose page file is gone.
+- **Every storage mode now stores only non-default values.** A field is written
+  only when it differs from what the extension computes for the file anyway —
+  `title` from the first `# Heading` (else the filename), empty `description`,
+  `markdown`/`en`, published, public, no tags. `id`, `updatedAt` and `syncHash`
+  are always stored. Because a default is calculated, not stored, it follows the
+  file: rename a page's `.md` or edit its heading and a default title updates on
+  the next sync with nothing to migrate. A typical page's whole front matter is
+  now three lines. Files written by earlier versions are tidied to the short form
+  the next time they sync (no network call, no page-history bump).
+- **Renaming or moving a page carries its metadata with it — now for folders
+  too, and for the single file.** In the Explorer, a renamed/moved `.md` keeps its
+  sidecar (as before); a renamed/moved *folder* re-keys every page under it in
+  `.wikijs.metadata.json`; a move that crosses sync roots, or lands in a folder
+  with a different storage mode, writes the metadata into the destination's mode.
+  A rename outside VS Code (`mv`, `git mv`) fires no event and can't be followed.
+- An unknown `metadataStorage` value now falls back to `frontmatter` instead of
+  being passed through.
+- An empty front-matter block (`---` straight into `---`) is now recognised, so a
+  page with nothing to store still round-trips.
+
 ## 0.13.0 — 2026-09-11
 
 - **Metadata can be kept in a sidecar file instead of front matter.** New

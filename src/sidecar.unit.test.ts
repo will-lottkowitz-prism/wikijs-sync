@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PageMeta } from './pageFile';
+import { PageMeta, defaultMetaForFile } from './pageFile';
 import {
   isSidecarName,
   parseSidecar,
@@ -8,6 +8,7 @@ import {
   sidecarPathFor,
 } from './sidecar';
 
+const defaults = defaultMetaForFile('/w/docs/guide/intro.md', '');
 const meta: PageMeta = {
   id: 7,
   title: 'Page: Title',
@@ -41,34 +42,57 @@ describe('isSidecarName', () => {
 
 describe('serialize / parse round-trip', () => {
   it('recovers every field', () => {
-    const parsed = parseSidecar(serializeSidecar(meta));
+    const parsed = parseSidecar(serializeSidecar(meta, defaults), defaults);
     expect({ ...parsed, path: meta.path }).toEqual(meta);
   });
 
   it('tolerates CRLF and skips the comment header', () => {
-    const crlf = serializeSidecar(meta).replace(/\n/g, '\r\n');
-    const parsed = parseSidecar(crlf);
+    const crlf = serializeSidecar(meta, defaults).replace(/\n/g, '\r\n');
+    const parsed = parseSidecar(crlf, defaults);
     expect(parsed.id).toBe(7);
     expect(parsed.tags).toEqual(['b', 'a']);
     expect(parsed.syncHash).toBe('deadbeef');
   });
 
   it('omits updatedAt / syncHash when absent', () => {
-    const bare = serializeSidecar({
-      ...meta,
-      updatedAt: undefined,
-      syncHash: undefined,
-    });
+    const bare = serializeSidecar(
+      { ...meta, updatedAt: undefined, syncHash: undefined },
+      defaults
+    );
     expect(bare).not.toContain('updatedAt');
     expect(bare).not.toContain('syncHash');
   });
 });
 
+describe('default omission', () => {
+  it('writes nothing for a field at its default', () => {
+    const text = serializeSidecar(
+      { ...defaults, id: 7, syncHash: 'x' },
+      defaults
+    );
+    for (const key of [
+      'title',
+      'description',
+      'editor',
+      'locale',
+      'isPublished',
+      'isPrivate',
+      'tags',
+    ]) {
+      expect(text).not.toMatch(new RegExp(`^${key}:`, 'm'));
+    }
+    expect(text).toContain('id: 7');
+    expect(parseSidecar(text, defaults).title).toBe('Intro');
+  });
+});
+
 describe('sidecarIsCanonical', () => {
   it('true for its own output, false once edited', () => {
-    const text = serializeSidecar(meta);
-    expect(sidecarIsCanonical(text, meta)).toBe(true);
-    expect(sidecarIsCanonical(text + 'stray: 1\n', meta)).toBe(false);
-    expect(sidecarIsCanonical(text.replace(/\n/g, '\r\n'), meta)).toBe(true);
+    const text = serializeSidecar(meta, defaults);
+    expect(sidecarIsCanonical(text, meta, defaults)).toBe(true);
+    expect(sidecarIsCanonical(text + 'stray: 1\n', meta, defaults)).toBe(false);
+    expect(
+      sidecarIsCanonical(text.replace(/\n/g, '\r\n'), meta, defaults)
+    ).toBe(true);
   });
 });
