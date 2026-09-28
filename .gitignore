@@ -8,6 +8,11 @@ dist/
 coverage/
 .DS_Store
 
+# Live secrets - never commit
+.env
+.env.*
+!.env.example
+
 # CI-only build products
 latest.json
 .ci/RELEASE_NOTES.md
