@@ -8,6 +8,8 @@ export interface PathContext {
   root: string;
   /** Wiki path prefix `root` maps to. '' = wiki root. No leading/trailing slash. */
   wikiPath: string;
+  /** Lowercase every page path (so it agrees with Wiki.js's lowercase asset folders). */
+  lowercasePaths?: boolean;
 }
 
 export interface MatchContext extends PathContext {
@@ -116,20 +118,26 @@ export const pagePathForFile = (ctx: PathContext, filePath: string): string => {
   const joined = [ctx.wikiPath, sanitizeSegments(relPosix)]
     .filter(Boolean)
     .join('/');
-  return guardFirstSegment(joined);
+  return guardFirstSegment(ctx.lowercasePaths ? joined.toLowerCase() : joined);
 };
 
 /**
  * Local `.md` file path for a wiki page path, within `ctx`. A page at exactly
  * `ctx.wikiPath` lands in `index.md` at the context root.
  */
-export const fileForPagePath = (ctx: PathContext, pagePath: string): string => {
+export const fileForPagePath = (
+  ctx: PathContext,
+  rawPagePath: string
+): string => {
+  const lower = ctx.lowercasePaths;
+  const pagePath = lower ? rawPagePath.toLowerCase() : rawPagePath;
+  const wikiPath = lower ? ctx.wikiPath.toLowerCase() : ctx.wikiPath;
   let rel = pagePath;
-  if (ctx.wikiPath) {
-    if (pagePath === ctx.wikiPath) {
+  if (wikiPath) {
+    if (pagePath === wikiPath) {
       rel = 'index';
-    } else if (pagePath.startsWith(`${ctx.wikiPath}/`)) {
-      rel = pagePath.slice(ctx.wikiPath.length + 1);
+    } else if (pagePath.startsWith(`${wikiPath}/`)) {
+      rel = pagePath.slice(wikiPath.length + 1);
     }
   }
   return path.join(ctx.root, `${rel}.md`);

@@ -61,6 +61,7 @@ export interface WikiSyncFile {
 }
 
 export type AutoRenameMode = 'prompt' | 'auto' | 'off';
+export type TrackDeletionsMode = 'prompt' | 'off';
 
 export interface WikiSyncSettings {
   url: string;
@@ -70,6 +71,8 @@ export interface WikiSyncSettings {
   defaultAssets: boolean;
   defaultExclude: string[];
   autoRenameIllegalPaths: AutoRenameMode;
+  lowercasePaths: boolean;
+  trackDeletions: TrackDeletionsMode;
   metadataStorage: MetadataStorage;
 }
 
@@ -90,6 +93,8 @@ export interface SyncContext {
   configPath?: string;
   /** Token from the `.wikisync.json`, if it set one. */
   fileToken?: string;
+  /** Lowercase every page path (`wikijsSync.lowercasePaths`). */
+  lowercasePaths: boolean;
   /** Where per-page sync metadata is stored for this subtree. */
   metadataStorage: MetadataStorage;
 }
@@ -110,6 +115,8 @@ export function getSettings(): WikiSyncSettings {
       'autoRenameIllegalPaths',
       'prompt'
     ),
+    lowercasePaths: cfg.get<boolean>('lowercasePaths', false),
+    trackDeletions: cfg.get<TrackDeletionsMode>('trackDeletions', 'prompt'),
     metadataStorage: coerceStorage(cfg.get('metadataStorage', 'frontmatter')),
   };
 }
@@ -197,6 +204,7 @@ export async function resolveContext(
       exclude: file.exclude ?? settings.defaultExclude,
       configPath,
       fileToken: file.token?.trim() || undefined,
+      lowercasePaths: settings.lowercasePaths,
       metadataStorage:
         file.metadataStorage === undefined
           ? settings.metadataStorage
@@ -251,6 +259,7 @@ function legacyContext(
     assets: settings.defaultAssets,
     include: undefined,
     exclude: settings.defaultExclude,
+    lowercasePaths: settings.lowercasePaths,
     metadataStorage: settings.metadataStorage,
   };
 }

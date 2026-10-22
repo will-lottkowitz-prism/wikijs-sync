@@ -9,6 +9,7 @@ import {
   getPageByPath,
   getPageStub,
   listAssetFolders,
+  deletePage,
   listAssets,
   listPages,
   updatePage,
@@ -22,6 +23,13 @@ import {
   relocateMetadata,
   savePage,
 } from './pageStore';
+import { assetNeedsUpload } from './assetSync';
+import {
+  addPending,
+  findPending,
+  listPending,
+  removePending,
+} from './pendingDeletes';
 import { pruneCentralOrphans } from './centralStore';
 import { isSidecarName } from './sidecar';
 import {
@@ -91,9 +99,10 @@ function resolveFolderScope(
     );
   }
   const relPosix = rel === '' ? '' : rel.split(path.sep).join('/');
+  const wikiPrefix = [ctx.wikiPath, relPosix].filter(Boolean).join('/');
   return {
     folderPath,
-    wikiPrefix: [ctx.wikiPath, relPosix].filter(Boolean).join('/'),
+    wikiPrefix: ctx.lowercasePaths ? wikiPrefix.toLowerCase() : wikiPrefix,
   };
 }
 
@@ -103,14 +112,25 @@ function describeRoot(ctx: SyncContext): string {
     : `the content dir (${ctx.root})`;
 }
 
-// The remote pages at or under a wiki-path prefix ('' = all).
+// The remote pages at or under a wiki-path prefix ('' = all). With
+// `ignoreCase`, pages still at a mixed-case path are found too, so they can be
+// moved to their lowercase path.
 function pagesUnder<T extends { path: string }>(
   pages: T[],
-  prefix: string
+  prefix: string,
+  ignoreCase = false
 ): T[] {
-  return pages.filter(
-    (p) => prefix === '' || p.path === prefix || p.path.startsWith(`${prefix}/`)
-  );
+  const pre = ignoreCase ? prefix.toLowerCase() : prefix;
+  return pages.filter((p) => {
+    const pp = ignoreCase ? p.path.toLowerCase() : p.path;
+    return pre === '' || pp === pre || pp.startsWith(`${pre}/`);
+  });
+}
+
+// A page whose server path differs from the target only in letter case: with
+// `lowercasePaths` on this is the migration to lowercase, not a real move.
+function isCaseOnlyMove(ctx: SyncContext, from: string, to: string): boolean {
+  return ctx.lowercasePaths && from !== to && from.toLowerCase() === to;
 }
 
 // Where a page's metadata is stored, for the context it syncs under.
@@ -175,6 +195,11 @@ export function registerCommands(context: vscode.ExtensionContext) {
     // renamed or moved in the Explorer: sidecars follow their `.md`, and entries
     // in `.wikijs.metadata.json` are re-keyed to the new path.
     vscode.workspace.onDidRenameFiles((e) => onRenamed(out, e.files)),
+    // Remember deleted pages (read before the file is gone) so the next sync can
+    // offer to delete them on the server too.
+    vscode.workspace.onWillDeleteFiles((e) =>
+      e.waitUntil(onWillDelete(context, out, e.files))
+    ),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('wikijsSync')) updateContentRootContext();
     }),
@@ -289,7 +314,11 @@ async function downloadAll(
   const ctx = resolveLegacyContext();
   const token = await resolveToken(context, ctx);
 
-  const pages = pagesUnder(await listPages(ctx.url, token), ctx.wikiPath);
+  const pages = pagesUnder(
+    await listPages(ctx.url, token),
+    ctx.wikiPath,
+    ctx.lowercasePaths
+  );
   if (pages.length === 0) {
     throw new Error(
       `No Wiki.js pages found at or under "${ctx.wikiPath || '/'}".`
@@ -517,12 +546,16 @@ async function uploadAssetMirrored(
     folderCache.set(relDir, folderId);
   }
 
-  const existing = await listAssets(ctx.url, token, folderId);
-  if (existing.some((a) => a.filename === filename)) {
-    out.appendLine(
-      `asset ${filename} already exists on server at ${link}; skipping`
-    );
-    return false;
+  const existing = (await listAssets(ctx.url, token, folderId)).find(
+    (a) => a.filename === filename
+  );
+  if (existing) {
+    const stat = await fs.stat(filePath);
+    if (!assetNeedsUpload(stat, existing)) {
+      out.appendLine(`asset ${filename} unchanged at ${link}; skipping`);
+      return false;
+    }
+    out.appendLine(`asset ${filename} changed locally; replacing ${link}`);
   }
 
   const fileContent = await fs.readFile(filePath);
@@ -684,6 +717,8 @@ interface Stats {
   /** Unchanged files whose front matter was rewritten to canonical form. */
   tidied: number;
   conflicts: number;
+  /** Server pages deleted after a local deletion was confirmed. */
+  deleted: number;
   failed: number;
   assetsUploaded: number;
   assetsSkipped: number;
@@ -695,6 +730,7 @@ const newStats = (): Stats => ({
   skipped: 0,
   tidied: 0,
   conflicts: 0,
+  deleted: 0,
   failed: 0,
   assetsUploaded: 0,
   assetsSkipped: 0,
@@ -707,6 +743,7 @@ function finish(out: vscode.OutputChannel, lead: string, s: Stats) {
     (s.downloaded ? `, ${s.downloaded} downloaded` : '') +
     (s.skipped ? `, ${s.skipped} unchanged` : '') +
     (s.tidied ? `, ${s.tidied} tidied` : '') +
+    (s.deleted ? `, ${s.deleted} deleted on the server` : '') +
     (s.conflicts ? `, ${s.conflicts} conflict(s) left unresolved` : '') +
     `, ${s.assetsUploaded} asset(s) uploaded` +
     (s.assetsSkipped ? `, ${s.assetsSkipped} already present` : '') +
@@ -837,7 +874,11 @@ async function downloadFolder(
   const token = await resolveToken(context, ctx);
   const { wikiPrefix } = resolveFolderScope(ctx, uri, 'download');
 
-  const inScope = pagesUnder(await listPages(ctx.url, token), wikiPrefix);
+  const inScope = pagesUnder(
+    await listPages(ctx.url, token),
+    wikiPrefix,
+    ctx.lowercasePaths
+  );
   if (inScope.length === 0) {
     throw new Error(
       `No Wiki.js pages found at or under "${wikiPrefix || '/'}".`
@@ -902,7 +943,7 @@ async function syncFolder(
     listPages(ctx.url, token),
   ]);
   const eligible = localFiles.filter((f) => fileMatchesContext(ctx, f));
-  const remoteInScope = pagesUnder(remotePages, wikiPrefix);
+  const remoteInScope = pagesUnder(remotePages, wikiPrefix, ctx.lowercasePaths);
   const remoteByPath = new Map(remoteInScope.map((p) => [p.path, p]));
   const remoteById = new Map(remoteInScope.map((p) => [p.id, p]));
   const matchedRemotePaths = new Set<string>();
@@ -999,12 +1040,14 @@ async function syncFolder(
             // can answer for everything with "…All".
             if (meta.id && remoteById.has(meta.id)) {
               const from = remoteById.get(meta.id)!;
-              const choice = await moveResolver.resolve(
-                relFilePath,
-                meta.id,
-                from.path,
-                remotePath
-              );
+              const choice = isCaseOnlyMove(ctx, from.path, remotePath)
+                ? 'move'
+                : await moveResolver.resolve(
+                    relFilePath,
+                    meta.id,
+                    from.path,
+                    remotePath
+                  );
               if (choice === 'skip') {
                 stats.conflicts++;
                 out.appendLine(
@@ -1090,10 +1133,25 @@ async function syncFolder(
         }
       }
 
+      const deleteResolver = new DeleteResolver();
       for (const [remotePath, page] of remoteByPath) {
         if (matchedRemotePaths.has(remotePath) || matchedRemoteIds.has(page.id))
           continue;
         const filePath = fileForPagePath(ctx, remotePath);
+        if (
+          await confirmServerDelete(
+            context,
+            out,
+            ctx,
+            token,
+            page,
+            filePath,
+            deleteResolver
+          )
+        ) {
+          stats.deleted++;
+          continue;
+        }
         try {
           const full = await getPage(ctx.url, token, page.id);
           await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -1112,6 +1170,8 @@ async function syncFolder(
           );
         }
       }
+
+      await dropStalePending(context, ctx, wikiPrefix, remotePages);
 
       if (ctx.assets) {
         const assetFiles = (await findAssetFiles(folderPath)).filter((f) =>
@@ -1289,6 +1349,149 @@ async function onRenamed(
   }
 }
 
+// -- local deletions ------------------------------------------------------
+
+// Before a `.md` file or folder is deleted, note the page(s) it carried (id +
+// path) so the next sync can ask about deleting them on the server. Runs before
+// the delete because the file's metadata is gone afterwards.
+async function onWillDelete(
+  context: vscode.ExtensionContext,
+  out: vscode.OutputChannel,
+  uris: readonly vscode.Uri[]
+) {
+  if (getSettings().trackDeletions === 'off') return;
+  for (const uri of uris) {
+    try {
+      let files: string[];
+      if (uri.fsPath.endsWith('.md')) files = [uri.fsPath];
+      else if ((await fs.stat(uri.fsPath)).isDirectory())
+        files = await findMarkdownFiles(uri.fsPath);
+      else continue;
+      for (const filePath of files) {
+        const ctx = await resolveContext(filePath).catch(() => undefined);
+        if (!ctx || !fileMatchesContext(ctx, filePath)) continue;
+        const { meta } = await loadPage(filePath, metaLoc(ctx));
+        await addPending(context.workspaceState, {
+          url: ctx.url,
+          root: ctx.root,
+          path: pagePathForFile(ctx, filePath),
+          id: meta.id,
+          updatedAt: meta.updatedAt,
+        });
+      }
+    } catch (err: any) {
+      out.appendLine(
+        `delete: could not record ${uri.fsPath}: ${err?.message ?? err}`
+      );
+    }
+  }
+}
+
+type DeleteChoice = 'delete' | 'keep';
+
+class DeleteResolver {
+  private sticky?: DeleteChoice;
+
+  async resolve(page: string, serverChanged: boolean): Promise<DeleteChoice> {
+    if (this.sticky) return this.sticky;
+    const choice = await vscode.window.showWarningMessage(
+      `Wiki.js Sync: you deleted "${page}" locally. Delete the page on the server too?` +
+        (serverChanged
+          ? ' It was edited on the server since you last synced.'
+          : '') +
+        ' (Wiki.js keeps its history. Keep re-downloads it.)',
+      { modal: true },
+      'Delete',
+      'Delete All',
+      'Keep',
+      'Keep All'
+    );
+    switch (choice) {
+      case 'Delete All':
+        this.sticky = 'delete';
+        return 'delete';
+      case 'Keep All':
+        this.sticky = 'keep';
+        return 'keep';
+      case 'Delete':
+        return 'delete';
+      default:
+        return 'keep';
+    }
+  }
+}
+
+// If `page` (a server page with no local file) was deleted locally, asks whether
+// to delete it on the server. Returns true when it was deleted, so the caller
+// must not re-download it; false means carry on as usual.
+async function confirmServerDelete(
+  context: vscode.ExtensionContext,
+  out: vscode.OutputChannel,
+  ctx: SyncContext,
+  token: string,
+  page: { id: number; path: string; updatedAt: string },
+  filePath: string,
+  resolver: DeleteResolver
+): Promise<boolean> {
+  if (getSettings().trackDeletions === 'off') return false;
+  const pending = findPending(
+    listPending(context.workspaceState).filter(
+      (e) => e.url === ctx.url && e.root === ctx.root
+    ),
+    page
+  );
+  if (!pending) return false;
+  try {
+    await fs.access(filePath);
+    await removePending(context.workspaceState, pending); // restored since
+    return false;
+  } catch {
+    /* still gone */
+  }
+  try {
+    const choice = await resolver.resolve(
+      page.path,
+      pending.updatedAt !== undefined &&
+        !sameInstant(pending.updatedAt, page.updatedAt)
+    );
+    await removePending(context.workspaceState, pending);
+    if (choice === 'keep') return false;
+    await deletePage(ctx.url, token, page.id);
+    out.appendLine(
+      `sync: deleted page "${page.path}" (id ${page.id}) on the server`
+    );
+    return true;
+  } catch (err: any) {
+    out.appendLine(
+      `sync: FAILED to delete ${page.path}: ${err?.message ?? err}`
+    );
+    return false;
+  }
+}
+
+// Forget recorded deletions in this sync's scope whose page is gone from the
+// server (nothing left to ask) or whose file is back.
+async function dropStalePending(
+  context: vscode.ExtensionContext,
+  ctx: SyncContext,
+  wikiPrefix: string,
+  remotePages: { id: number; path: string }[]
+) {
+  const pre = wikiPrefix.toLowerCase();
+  for (const e of listPending(context.workspaceState)) {
+    if (e.url !== ctx.url || e.root !== ctx.root) continue;
+    const p = e.path.toLowerCase();
+    if (pre !== '' && p !== pre && !p.startsWith(`${pre}/`)) continue;
+    const fileBack = await fs
+      .access(fileForPagePath(ctx, e.path))
+      .then(() => true)
+      .catch(() => false);
+    if (fileBack || !remotePages.some((r) => findPending([e], r))) {
+      await removePending(context.workspaceState, e);
+    }
+  }
+}
+
 // -- move / copy resolution ----------------------------------------------
 
 // When a local file carries a page `id` but sits at a path that doesn't match
@@ -1456,14 +1659,17 @@ async function ensureLegalLocation(
     }
   }
 
-  try {
-    await fs.access(target);
-    out.appendLine(
-      `skipped ${relFrom}: cannot rename to "${relTo}" — a file is already there`
-    );
-    return undefined;
-  } catch {
-    /* target free */
+  // A case-only rename "exists" on a case-insensitive filesystem; it is the file itself.
+  if (target.toLowerCase() !== filePath.toLowerCase()) {
+    try {
+      await fs.access(target);
+      out.appendLine(
+        `skipped ${relFrom}: cannot rename to "${relTo}" — a file is already there`
+      );
+      return undefined;
+    } catch {
+      /* target free */
+    }
   }
 
   await fs.mkdir(path.dirname(target), { recursive: true });
@@ -1574,9 +1780,14 @@ async function syncUploadLocked(
   if (meta.id && !opts.skipConflictPrompt) {
     const stub = await getPageStub(ctx.url, token, meta.id);
     if (stub && stub.path !== meta.path) {
-      const choice = await (
-        opts.moveResolver ?? new MoveResolver(false)
-      ).resolve(path.basename(filePath), meta.id, stub.path, meta.path);
+      const choice = isCaseOnlyMove(ctx, stub.path, meta.path)
+        ? 'move'
+        : await (opts.moveResolver ?? new MoveResolver(false)).resolve(
+            path.basename(filePath),
+            meta.id,
+            stub.path,
+            meta.path
+          );
       if (choice === 'skip') {
         out.appendLine(
           `skipped ${filePath}: move/copy of page id ${meta.id} not resolved`

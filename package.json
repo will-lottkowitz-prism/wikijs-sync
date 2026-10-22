@@ -2,7 +2,7 @@
   "name": "wikijs-sync",
   "displayName": "Wiki.js Sync",
   "description": "Download and upload Wiki.js pages as local Markdown files, SFTP-style, with an upload-on-save option.",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "publisher": "xQx",
   "license": "MIT",
   "author": {
@@ -94,6 +94,22 @@
           "default": "prompt",
           "order": 7,
           "markdownDescription": "A page's Wiki.js path is derived from the file's location, and Wiki.js rejects a path containing `.`, a space, `\\` or `//`. When a local file's location would produce an illegal path: `prompt` asks whether to rename the file to a legal form (with a \"…All\" button for bulk runs); `auto` renames silently and logs it; `off` skips the file and reports it. Illegal characters become `-`; case is preserved."
+        },
+        "wikijsSync.lowercasePaths": {
+          "type": "boolean",
+          "default": false,
+          "order": 7.5,
+          "markdownDescription": "Lowercase every page path (and the local file/folder it maps to). **Turn this on if your environment allows it.** Wiki.js only allows lowercase asset folders, so an image uploaded from `Docs/Images/a.png` is served at `/docs/images/a.png`; with mixed-case page paths, relative image and page links (`images/a.png`) resolve to a path that doesn't exist, and links break depending on how the URL was typed. With this on, pages and assets share one case and relative links work. Off by default because it renames existing pages (page id and history are kept, but their URLs change, so external links to the old mixed-case paths stop working) and renames local files on the next sync (honouring `autoRenameIllegalPaths`)."
+        },
+        "wikijsSync.trackDeletions": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "off"
+          ],
+          "default": "prompt",
+          "order": 7.6,
+          "markdownDescription": "Deleting a synced `.md` file (or a folder of them) in VS Code is remembered. At the next **Sync Folder with Wiki**, `prompt` asks whether to delete that page on the server too (with a \"…All\" button); declining keeps the page and re-downloads it. Nothing is ever deleted on the server without that confirmation. `off` forgets deletions, so a synced folder just re-downloads the page. Only deletions made inside VS Code are seen; `rm` or `git` deletions are not."
         },
         "wikijsSync.metadataStorage": {
           "type": "string",

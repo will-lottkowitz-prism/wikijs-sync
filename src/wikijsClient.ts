@@ -263,6 +263,8 @@ export async function createAssetFolder(
 export interface AssetSummary {
   id: number;
   filename: string;
+  fileSize: number;
+  updatedAt: string;
 }
 
 export async function listAssets(
@@ -273,7 +275,7 @@ export async function listAssets(
   const data = await graphqlRequest<{ assets: { list: AssetSummary[] } }>(
     url,
     token,
-    'query($folderId: Int!) { assets { list(folderId: $folderId, kind: ALL) { id filename } } }',
+    'query($folderId: Int!) { assets { list(folderId: $folderId, kind: ALL) { id filename fileSize updatedAt } } }',
     { folderId }
   );
   return data.assets.list;
@@ -372,4 +374,25 @@ export async function updatePage(
     );
   }
   return result.page;
+}
+
+export async function deletePage(
+  url: string,
+  token: string,
+  id: number
+): Promise<void> {
+  const data = await graphqlRequest<{
+    pages: {
+      delete: { responseResult: { succeeded: boolean; message: string } };
+    };
+  }>(
+    url,
+    token,
+    'mutation($id: Int!) { pages { delete(id: $id) { responseResult { succeeded message } } } }',
+    { id }
+  );
+  const result = data.pages.delete.responseResult;
+  if (!result.succeeded) {
+    throw new Error(`Delete failed for page id ${id}: ${result.message}`);
+  }
 }

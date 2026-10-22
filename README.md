@@ -80,7 +80,7 @@ my-project/
     ├── overview.md        → wiki page  Products/my-project/overview
     ├── architecture.md    → wiki page  Products/my-project/architecture
     └── images/
-        └── topology.png   → asset      /Products/my-project/images/topology.png
+        └── topology.png   → asset      /products/my-project/images/topology.png
 ```
 
 Now anyone who checks out `my-project` can right-click `docs/` →
@@ -113,7 +113,7 @@ With `wikiPath` set to `Products/x` and the `.wikisync.json` in folder `F`:
 | `F/guide/setup.md` | `Products/x/guide/setup` |
 | `F/index.md` | `Products/x` (the section landing page) |
 | `F/Node.js Notes.md` | `Products/x/Node-js-Notes` (file renamed — see [Page paths](#page-paths)) |
-| `F/diagram.png` | asset `/Products/x/diagram.png` (when `assets: true`) |
+| `F/diagram.png` | asset `/products/x/diagram.png` (when `assets: true`) |
 
 An empty or absent `wikiPath` maps the folder straight to the wiki root.
 
@@ -148,6 +148,8 @@ saved (if it's inside a synced folder and passes that folder's include/exclude).
 | `wikijsSync.syncNonMarkdownAsAssets` | `true` | Default for a `.wikisync.json`'s `"assets"`. |
 | `wikijsSync.exclude` | `["**/.*", "**/node_modules/**"]` | Default ignore globs for folders that don't set their own `"exclude"` / `"include"`. |
 | `wikijsSync.autoRenameIllegalPaths` | `"prompt"` | When a file's location would produce a Wiki.js-illegal path: `prompt` (ask, with a "…All" button), `auto` (rename + log), `off` (skip + report). |
+| `wikijsSync.lowercasePaths` | `false` | Lowercase every page path (and the local file/folder it maps to). **Recommended if your environment allows it:** Wiki.js asset folders are always lowercase, so mixed-case pages break relative image/page links. Off by default because the next sync renames local files and moves existing pages (id and history kept, URLs change). See [Page paths](#page-paths). |
+| `wikijsSync.trackDeletions` | `"prompt"` | Deleting a synced `.md` file (or folder) in VS Code is remembered; the next **Sync Folder with Wiki** asks whether to delete that page on the server too (**Delete** / **Delete All** / **Keep**). Keep, or `off`, re-downloads it. Nothing is deleted without confirmation; deletions made outside VS Code (`rm`, `git`) aren't seen. |
 | `wikijsSync.metadataStorage` | `"frontmatter"` | Where per-page sync metadata lives: `frontmatter` (a `---` block in each `.md`), `sidecar` (a hidden `.<name>.md.wikisync.yaml` per page) or `single-file` (one `.wikijs.metadata.json` at the sync root) — the last two leave the `.md` pure Markdown. A `.wikisync.json` `"metadataStorage"` overrides it per folder. See [Metadata storage](#metadata-storage). |
 
 ## Page paths
@@ -169,6 +171,13 @@ name or folder would produce one is **renamed** to a legal form first (illegal
 characters → `-`, case preserved), controlled by `wikijsSync.autoRenameIllegalPaths`
 — e.g. `Node.js Notes.md` → `Node-js-Notes.md` → page `…/Node-js-Notes`. Renaming
 doesn't fix `[links](/other/page.md)` in *other* files that point at the old name.
+
+**Asset folders are always lowercase** — Wiki.js only allows lowercase folder slugs, so `Docs/Images/a.png`
+is served at `/docs/images/a.png` (the filename keeps its case). A page at `/Docs/Guide` then can't reach
+it with the relative link `images/a.png`. Turn on `wikijsSync.lowercasePaths` to put pages under
+lowercase paths too: on the next sync each local file is renamed to lowercase (per
+`autoRenameIllegalPaths`) and its page is moved on the server automatically, keeping its id and history.
+External links to the old mixed-case URLs stop working. Local asset files are not moved.
 
 ## Metadata storage
 

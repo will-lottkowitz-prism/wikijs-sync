@@ -185,3 +185,37 @@ describe('fileMatchesContext', () => {
     expect(fileMatchesContext(both, '/w/docs/drafts/wip.md')).toBe(false);
   });
 });
+
+describe('lowercasePaths', () => {
+  const lc = {
+    root: '/w/docs',
+    wikiPath: 'Services/KeyCloak',
+    lowercasePaths: true,
+  };
+  it('lowercases the page path, prefix included', () => {
+    expect(pagePathForFile(lc, '/w/docs/Admin/adminDocumentation.md')).toBe(
+      'services/keycloak/admin/admindocumentation'
+    );
+  });
+  it('leaves case alone when off', () => {
+    expect(
+      pagePathForFile({ ...lc, lowercasePaths: false }, '/w/docs/A/B.md')
+    ).toBe('Services/KeyCloak/A/B');
+  });
+  it('guards a lowercased first segment that becomes reserved', () => {
+    expect(
+      pagePathForFile(
+        { root: '/w', wikiPath: '', lowercasePaths: true },
+        '/w/API/x.md'
+      )
+    ).toBe('_api/x');
+  });
+  it('maps a mixed-case remote path to a lowercase file under a mixed-case prefix', () => {
+    expect(posix(fileForPagePath(lc, 'Services/KeyCloak/Admin/Foo'))).toBe(
+      '/w/docs/admin/foo.md'
+    );
+    expect(posix(fileForPagePath(lc, 'Services/KeyCloak'))).toBe(
+      '/w/docs/index.md'
+    );
+  });
+});

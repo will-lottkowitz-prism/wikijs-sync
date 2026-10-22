@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.0 — 2026-10-22
+
+- Lowercase page paths setting (lowercasePaths) with auto-move of mixed-case pages; changed assets are replaced (size/mtime check) instead of skipped; local deletions are remembered and the next sync offers to delete the server page (trackDeletions).
+
+
 ## 0.14.1 — 2026-10-22
 
 - Fix asset links: folder segments are slugified (lowercase) to match the Wiki.js asset folders, so logged/linked asset URLs resolve; slugifyFolderSegment moved to pathmap with tests.
