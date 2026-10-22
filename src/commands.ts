@@ -39,6 +39,7 @@ import {
   resolveLegacyContext,
   resolveMetadataLocation,
   resolveToken,
+  slugifyFolderSegment,
 } from './config';
 
 const TOKEN_KEY = 'wikijsSync.token';
@@ -466,15 +467,6 @@ function guessMime(filename: string): string {
     MIME_BY_EXT[path.extname(filename).toLowerCase()] ??
     'application/octet-stream'
   );
-}
-
-function slugifyFolderSegment(segment: string): string {
-  return segment
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
 }
 
 // Resolves the Wiki.js asset folder id for a wiki-relative directory path,

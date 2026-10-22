@@ -8,6 +8,7 @@ import {
   normalizeWikiPath,
   pagePathForFile,
   sanitizeWikiPath,
+  slugifyFolderSegment,
 } from './pathmap';
 
 const posix = (p: string) => p.replace(/\\/g, '/');
@@ -118,16 +119,25 @@ describe('fileForPagePath', () => {
 });
 
 describe('assets', () => {
-  it('builds a server-absolute asset link', () => {
+  it('builds a server-absolute asset link with lowercase folder slugs', () => {
     expect(assetLinkForFile(ctx, '/w/docs/images/topo.png')).toBe(
-      '/Products/x/images/topo.png'
+      '/products/x/images/topo.png'
+    );
+  });
+  it('keeps the filename case but slugifies every folder segment', () => {
+    const c = { root: '/w/docs', wikiPath: 'Services/KeyCloak' };
+    expect(assetLinkForFile(c, '/w/docs/Images/Admin-Create.PNG')).toBe(
+      '/services/keycloak/images/Admin-Create.PNG'
     );
   });
   it('builds the wiki-relative asset folder', () => {
     expect(assetDirForFile(ctx, '/w/docs/images/topo.png')).toBe(
-      'Products/x/images'
+      'products/x/images'
     );
-    expect(assetDirForFile(ctx, '/w/docs/topo.png')).toBe('Products/x');
+    expect(assetDirForFile(ctx, '/w/docs/topo.png')).toBe('products/x');
+  });
+  it('slugifies folder segments', () => {
+    expect(slugifyFolderSegment('Key Cloak.v2')).toBe('key-cloak-v2');
   });
 });
 

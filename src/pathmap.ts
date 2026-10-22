@@ -136,19 +136,38 @@ export const fileForPagePath = (ctx: PathContext, pagePath: string): string => {
 };
 
 /** Server-absolute asset link for a local non-`.md` file inside `ctx`. */
-export const assetLinkForFile = (
-  ctx: PathContext,
-  filePath: string
-): string => {
-  const rel = toPosix(path.relative(ctx.root, filePath));
-  return '/' + [ctx.wikiPath, rel].filter(Boolean).join('/');
-};
+export const assetLinkForFile = (ctx: PathContext, filePath: string): string =>
+  '/' +
+  [assetDirForFile(ctx, filePath), path.basename(filePath)]
+    .filter(Boolean)
+    .join('/');
 
-/** Wiki-relative directory (for the asset folder tree) of a local non-`.md` file. */
+/**
+ * Wiki.js asset folders are addressed by slug and are lowercase-only, so folder
+ * segments are slugified when created. Filenames keep their case.
+ */
+export const slugifyFolderSegment = (segment: string): string =>
+  segment
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+/**
+ * Wiki-relative directory (for the asset folder tree) of a local non-`.md` file,
+ * as the slugified folder path Wiki.js actually holds (and serves) it under.
+ */
 export const assetDirForFile = (ctx: PathContext, filePath: string): string => {
   const relDir = path.dirname(path.relative(ctx.root, filePath));
   const relDirPosix = relDir === '.' ? '' : toPosix(relDir);
-  return [ctx.wikiPath, relDirPosix].filter(Boolean).join('/');
+  return [ctx.wikiPath, relDirPosix]
+    .filter(Boolean)
+    .join('/')
+    .split('/')
+    .map(slugifyFolderSegment)
+    .filter(Boolean)
+    .join('/');
 };
 
 // --- glob matching -----------------------------------------------------------

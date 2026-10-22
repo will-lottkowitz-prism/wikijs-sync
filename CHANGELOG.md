@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.1 — 2026-10-22
+
+- Fix asset links: folder segments are slugified (lowercase) to match the Wiki.js asset folders, so logged/linked asset URLs resolve; slugifyFolderSegment moved to pathmap with tests.
+
+
 ## 0.14.0 — 2026-09-21
 
 - **New `single-file` metadata storage.** `wikijsSync.metadataStorage` (and

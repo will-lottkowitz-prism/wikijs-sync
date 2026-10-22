@@ -312,4 +312,5 @@ export {
   fileMatchesContext,
   pagePathForFile,
   sanitizeWikiPath,
+  slugifyFolderSegment,
 } from './pathmap';
