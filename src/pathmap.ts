@@ -143,16 +143,26 @@ export const fileForPagePath = (
   return path.join(ctx.root, `${rel}.md`);
 };
 
+/**
+ * The filename Wiki.js stores an uploaded asset under: lowercased, whitespace
+ * runs turned into `_` (`FLEX Thesis.pdf` -> `flex_thesis.pdf`). Used to match a
+ * local file to its server copy, and as the name a local file is renamed to
+ * under `lowercasePaths`.
+ */
+export const serverAssetName = (filename: string): string =>
+  filename.toLowerCase().replace(/\s+/g, '_');
+
 /** Server-absolute asset link for a local non-`.md` file inside `ctx`. */
 export const assetLinkForFile = (ctx: PathContext, filePath: string): string =>
   '/' +
-  [assetDirForFile(ctx, filePath), path.basename(filePath)]
+  [assetDirForFile(ctx, filePath), serverAssetName(path.basename(filePath))]
     .filter(Boolean)
     .join('/');
 
 /**
  * Wiki.js asset folders are addressed by slug and are lowercase-only, so folder
- * segments are slugified when created. Filenames keep their case.
+ * segments are slugified when created. Filenames are normalised by the server
+ * too (see `serverAssetName`).
  */
 export const slugifyFolderSegment = (segment: string): string =>
   segment

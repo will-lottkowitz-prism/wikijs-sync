@@ -24,6 +24,12 @@ import {
   savePage,
 } from './pageStore';
 import { assetNeedsUpload } from './assetSync';
+import { symlinkedAncestor } from './fsGuards';
+import {
+  followFolderRenames,
+  renameFileToServerName,
+  serverAssetDir,
+} from './assetRename';
 import {
   addPending,
   findPending,
@@ -47,6 +53,7 @@ import {
   resolveLegacyContext,
   resolveMetadataLocation,
   resolveToken,
+  serverAssetName,
   slugifyFolderSegment,
 } from './config';
 
@@ -526,9 +533,43 @@ async function ensureAssetFolderPath(
   return parentId;
 }
 
+// With `lowercasePaths`, renames a local asset's folders to their slug and the
+// file to the name Wiki.js stores it under (lowercase, spaces -> `_`) so local
+// and server agree. Returns the file's path afterwards; unchanged when already
+// matching, when a target name is taken, or when the file sits under a symlinked
+// folder (that would rename files in another repo).
+async function renameAssetToServerName(
+  ctx: SyncContext,
+  filePath: string,
+  out: vscode.OutputChannel
+): Promise<string> {
+  if (!ctx.lowercasePaths) return filePath;
+  filePath = await followFolderRenames(ctx.root, filePath);
+  if ((await symlinkedAncestor(ctx.root, filePath)) !== undefined)
+    return filePath;
+
+  const relDir = path.relative(ctx.root, path.dirname(filePath));
+  const target = path.join(
+    ctx.root,
+    serverAssetDir(relDir),
+    serverAssetName(path.basename(filePath))
+  );
+  filePath = await renameCaseFolders(ctx, filePath, target, out, false);
+
+  const result = await renameFileToServerName(filePath);
+  if (result.renamed) {
+    out.appendLine(
+      `renamed asset ${path.relative(ctx.root, filePath)} -> ${path.relative(ctx.root, result.path)}`
+    );
+  }
+  return result.path;
+}
+
 // Uploads a local non-.md file to the Wiki.js asset folder that mirrors its
-// path within `ctx` (creating folders as needed), skipping it if a same-named
-// asset is already there. Returns whether an upload actually happened.
+// path within `ctx` (creating folders as needed), skipping it if the asset is
+// already there unchanged. The server lowercases names, so a local file is
+// matched to its server copy by `serverAssetName`; with `lowercasePaths` the
+// local file is renamed to that name first. Returns whether an upload happened.
 async function uploadAssetMirrored(
   ctx: SyncContext,
   token: string,
@@ -536,6 +577,7 @@ async function uploadAssetMirrored(
   out: vscode.OutputChannel,
   folderCache: Map<string, number>
 ): Promise<boolean> {
+  filePath = await renameAssetToServerName(ctx, filePath, out);
   const relDir = assetDirForFile(ctx, filePath);
   const filename = path.basename(filePath);
   const link = assetLinkForFile(ctx, filePath);
@@ -546,8 +588,9 @@ async function uploadAssetMirrored(
     folderCache.set(relDir, folderId);
   }
 
+  const serverName = serverAssetName(filename);
   const existing = (await listAssets(ctx.url, token, folderId)).find(
-    (a) => a.filename === filename
+    (a) => serverAssetName(a.filename) === serverName
   );
   if (existing) {
     const stat = await fs.stat(filePath);
@@ -650,7 +693,11 @@ async function uploadAssetCommand(
     folderId = await ensureAssetFolderPath(ctx.url, token, folderPath);
 
     const existing = await listAssets(ctx.url, token, folderId);
-    if (existing.some((a) => a.filename === filename)) {
+    if (
+      existing.some(
+        (a) => serverAssetName(a.filename) === serverAssetName(filename)
+      )
+    ) {
       const choice = await vscode.window.showWarningMessage(
         `Wiki.js Sync: an asset named "${filename}" already exists at /${folderPath}. Upload anyway (as a duplicate)?`,
         { modal: true },
@@ -1627,6 +1674,55 @@ class ConflictResolver {
   }
 }
 
+// With `lowercasePaths`, renames the existing folders on `filePath`'s way down
+// from the sync root to what `target` wants (e.g. `Services` -> `services`),
+// when only the case differs (or, with `caseOnly` false, whatever differs) and
+// the target folder isn't already there.
+// Returns the file's path after any folder renames. A symlinked folder is renamed
+// as a link; what it points to is left alone.
+async function renameCaseFolders(
+  ctx: SyncContext,
+  filePath: string,
+  target: string,
+  out: vscode.OutputChannel,
+  caseOnly = true
+): Promise<string> {
+  if (!ctx.lowercasePaths) return filePath;
+  const from = path.relative(ctx.root, path.dirname(filePath)).split(path.sep);
+  const to = path.relative(ctx.root, path.dirname(target)).split(path.sep);
+  if (from.length !== to.length || from[0] === '') return filePath;
+
+  let cur = ctx.root;
+  for (let i = 0; i < from.length; i++) {
+    const oldDir = path.join(cur, from[i]);
+    const newDir = path.join(cur, to[i]);
+    if (from[i] !== to[i]) {
+      if (caseOnly && from[i].toLowerCase() !== to[i]) return filePath; // not a case-only change
+      let free = false;
+      try {
+        const [a, b] = await Promise.all([fs.lstat(oldDir), fs.lstat(newDir)]);
+        free = a.ino === b.ino && a.dev === b.dev; // same dir on a case-insensitive fs
+      } catch {
+        free = true;
+      }
+      if (!free) return filePath; // a lowercase twin exists: fall back to per-file moves
+      await fs.rename(oldDir, newDir);
+      await relocateMetadata({
+        oldPath: oldDir,
+        newPath: newDir,
+        isDir: true,
+        oldRoot: ctx.root,
+        newLoc: metaLoc(ctx),
+      });
+      out.appendLine(
+        `renamed folder ${path.relative(ctx.root, oldDir)} -> ${path.relative(ctx.root, newDir)}`
+      );
+    }
+    cur = newDir;
+  }
+  return path.join(cur, path.basename(filePath));
+}
+
 // If `filePath`'s location maps to a Wiki.js-legal path, returns it unchanged.
 // Otherwise renames the file (honoring `mode`: prompt / auto / off) to the
 // sanitized location so local and remote agree and round-trips stay stable, and
@@ -1658,6 +1754,24 @@ async function ensureLegalLocation(
       return undefined;
     }
   }
+
+  // Fix the case of folders first, as one folder rename (keeping everything else
+  // in them, such as images), rather than leaving a mixed-case folder behind and
+  // creating a lowercase twin beside it.
+  filePath = await renameCaseFolders(ctx, filePath, target, out);
+
+  // Never rename a file *through* a symlinked folder: that renames the real file
+  // in whatever repo the link points to. The page path is still derived from the
+  // file's location, so the page syncs fine under its legal path.
+  const linked = await symlinkedAncestor(ctx.root, filePath);
+  if (linked !== undefined) {
+    out.appendLine(
+      `left ${path.relative(ctx.root, filePath)} in place: "${path.relative(ctx.root, linked)}" is a symlink, ` +
+        `so the page syncs as "${legalPath}" without renaming the file`
+    );
+    return filePath;
+  }
+  if (path.resolve(target) === path.resolve(filePath)) return filePath;
 
   // A case-only rename "exists" on a case-insensitive filesystem; it is the file itself.
   if (target.toLowerCase() !== filePath.toLowerCase()) {

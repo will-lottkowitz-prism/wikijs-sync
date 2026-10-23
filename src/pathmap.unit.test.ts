@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   assetDirForFile,
   assetLinkForFile,
+  serverAssetName,
   fileForPagePath,
   fileMatchesContext,
   matchGlob,
@@ -124,11 +125,18 @@ describe('assets', () => {
       '/products/x/images/topo.png'
     );
   });
-  it('keeps the filename case but slugifies every folder segment', () => {
+  it('lowercases the filename (as the server does) and slugifies every folder segment', () => {
     const c = { root: '/w/docs', wikiPath: 'Services/KeyCloak' };
-    expect(assetLinkForFile(c, '/w/docs/Images/Admin-Create.PNG')).toBe(
-      '/services/keycloak/images/Admin-Create.PNG'
+    expect(assetLinkForFile(c, '/w/docs/Images/Admin Create.PNG')).toBe(
+      '/services/keycloak/images/admin_create.png'
     );
+  });
+  it('maps a local asset name to the name Wiki.js stores', () => {
+    expect(serverAssetName('FLEX Thesis.pdf')).toBe('flex_thesis.pdf');
+    expect(serverAssetName('gmake--4p4p1--manual.pdf')).toBe(
+      'gmake--4p4p1--manual.pdf'
+    );
+    expect(serverAssetName('A  B\tC.PNG')).toBe('a_b_c.png');
   });
   it('builds the wiki-relative asset folder', () => {
     expect(assetDirForFile(ctx, '/w/docs/images/topo.png')).toBe(

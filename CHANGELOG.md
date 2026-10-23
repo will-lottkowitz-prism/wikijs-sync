@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.15.3 — 2026-10-23
+
+- Failed asset uploads (HTTP 500/413) now note the Wiki.js upload size limit; unit tests for asset rename helpers
+
+
+## 0.15.2 — 2026-10-23
+
+- lowercasePaths also renames asset folders to their server slug (lowercase, spaces -> -), and fixes stale asset paths after a folder rename
+
+
+## 0.15.1 — 2026-10-22
+
+- **Assets are matched to the server by Wiki.js's stored name** (lowercase,
+  spaces -> `_`). Previously a file like `FLEX Thesis.pdf` was never found
+  (the server holds `flex_thesis.pdf`), so it re-uploaded on every sync. With
+  `lowercasePaths` on, local asset files are renamed to that name (not through
+  symlinked folders); with it off they are only compared by it.
+- **Never renames files through a symlinked folder.** The illegal-path /
+  `lowercasePaths` rename left the real file in another repo renamed (and lost
+  track of it). A file under a symlinked folder is now left where it is and
+  syncs under its legal page path.
+- **`lowercasePaths` renames a mixed-case folder once** (`Services` ->
+  `services`, keeping images and everything else in it, and re-keying the
+  metadata) instead of creating a lowercase twin beside it. If a lowercase twin
+  already exists it falls back to per-file moves.
+
 ## 0.15.0 — 2026-10-22
 
 - Lowercase page paths setting (lowercasePaths) with auto-move of mixed-case pages; changed assets are replaced (size/mtime check) instead of skipped; local deletions are remembered and the next sync offers to delete the server page (trackDeletions).

@@ -27,3 +27,15 @@ export const assetNeedsUpload = (
   if (Number.isNaN(remoteMs)) return true;
   return local.mtimeMs > remoteMs;
 };
+
+/**
+ * Message for a failed asset upload. The server's response is kept as is (it can
+ * be a whole HTML error page, so only the start); a 500 or 413 usually means the
+ * file is over Wiki.js's upload size limit, so say so.
+ */
+export const assetUploadFailure = (status: number, body: string): string => {
+  const base = `Asset upload failed (HTTP ${status}): ${body.slice(0, 300)}`;
+  return status === 500 || status === 413
+    ? `${base}\n  Note: is the file above the size limit configured in Wiki.js (Admin > Site > Uploads)?`
+    : base;
+};

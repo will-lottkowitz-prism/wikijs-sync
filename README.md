@@ -173,11 +173,12 @@ characters → `-`, case preserved), controlled by `wikijsSync.autoRenameIllegal
 doesn't fix `[links](/other/page.md)` in *other* files that point at the old name.
 
 **Asset folders are always lowercase** — Wiki.js only allows lowercase folder slugs, so `Docs/Images/a.png`
-is served at `/docs/images/a.png` (the filename keeps its case). A page at `/Docs/Guide` then can't reach
+is served at `/docs/images/a.png` (Wiki.js also lowercases the filename and turns spaces into `_`). A page at `/Docs/Guide` then can't reach
 it with the relative link `images/a.png`. Turn on `wikijsSync.lowercasePaths` to put pages under
 lowercase paths too: on the next sync each local file is renamed to lowercase (per
 `autoRenameIllegalPaths`) and its page is moved on the server automatically, keeping its id and history.
-External links to the old mixed-case URLs stop working. Local asset files are not moved.
+External links to the old mixed-case URLs stop working. Local asset files and the folders above them are renamed
+to the server's form too (`My Images/Foo Bar.PNG` -> `my-images/foo_bar.png`); markdown links to them are not rewritten.
 
 ## Metadata storage
 
@@ -327,7 +328,11 @@ When a folder's `assets` is `true`, non-`.md` files under it are uploaded to the
 Wiki.js asset folder that mirrors their path — a file at
 `<folder>/images/diagram.png` with `wikiPath: "Products/x"` is uploaded to
 `/Products/x/images/diagram.png`, creating any missing asset folders. An asset
-already present at that path (same filename, same folder) is left alone.
+already present at that path is left alone unless it changed (size differs, or the local file is newer than the
+server copy). Names are compared the way Wiki.js stores them (lowercase, spaces -> `_`), so `Foo Bar.PNG` matches
+`foo_bar.png`. With `wikijsSync.lowercasePaths` on, the local file and its folders are renamed to that form.
+
+Uploads over Wiki.js's size limit fail with HTTP 500; raise it under Admin > Site > Uploads (default 5 MB).
 
 This is **push-only**: assets are never pulled back down (they carry no front
 matter to track sync state), so an asset added through the Wiki.js web UI won't

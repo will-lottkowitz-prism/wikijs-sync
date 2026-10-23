@@ -1,6 +1,7 @@
 import * as https from 'https';
 import * as http from 'http';
 import { URL } from 'url';
+import { assetUploadFailure } from './assetSync';
 
 export interface RemotePageSummary {
   id: number;
@@ -341,9 +342,7 @@ export async function uploadAsset(
   );
 
   if (status !== 200 || text.trim().toLowerCase() !== 'ok') {
-    throw new Error(
-      `Asset upload failed (HTTP ${status}): ${text.slice(0, 300)}`
-    );
+    throw new Error(assetUploadFailure(status, text));
   }
 }
 
