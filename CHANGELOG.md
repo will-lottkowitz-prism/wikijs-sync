@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.4 — 2026-11-10
+
+- Fixed handling of index.md and home.md links:
+
+
 ## 0.15.3 — 2026-10-23
 
 - Failed asset uploads (HTTP 500/413) now note the Wiki.js upload size limit; unit tests for asset rename helpers

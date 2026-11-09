@@ -140,6 +140,11 @@ function isCaseOnlyMove(ctx: SyncContext, from: string, to: string): boolean {
   return ctx.lowercasePaths && from !== to && from.toLowerCase() === to;
 }
 
+// `folder/index` or `folder/home` -> `folder`: the landing-page mapping, not a real move.
+function isLandingMove(from: string, to: string): boolean {
+  return from === `${to}/index` || from === `${to}/home`;
+}
+
 // Where a page's metadata is stored, for the context it syncs under.
 function metaLoc(ctx: SyncContext): MetaLocation {
   return { storage: ctx.metadataStorage, root: ctx.root };
@@ -993,6 +998,12 @@ async function syncFolder(
   const remoteInScope = pagesUnder(remotePages, wikiPrefix, ctx.lowercasePaths);
   const remoteByPath = new Map(remoteInScope.map((p) => [p.path, p]));
   const remoteById = new Map(remoteInScope.map((p) => [p.id, p]));
+  // Pages still at a mixed-case path, by lowercase path (pre-`lowercasePaths` leftovers).
+  const remoteMixedCase = new Map(
+    remoteInScope
+      .filter((p) => p.path !== p.path.toLowerCase())
+      .map((p) => [p.path.toLowerCase(), p])
+  );
   const matchedRemotePaths = new Set<string>();
   const matchedRemoteIds = new Set<number>();
   const moveResolver = new MoveResolver(true);
@@ -1081,20 +1092,43 @@ async function syncFolder(
 
           // No remote page at this file's location.
           if (!remote) {
+            // Same page, old mixed-case path, file has no id yet (e.g. a
+            // regenerated mirror): adopt that page (a case-only move) instead
+            // of creating a duplicate beside it.
+            // Likewise a legacy `<folder>/index` (or `/home`) page for a landing file.
+            const lowerPath = remotePath.toLowerCase();
+            const twin =
+              (ctx.lowercasePaths
+                ? remoteMixedCase.get(lowerPath)
+                : undefined) ??
+              [`${remotePath}/index`, `${remotePath}/home`]
+                .map((q) => remoteByPath.get(q))
+                .find((q) => q !== undefined && !matchedRemoteIds.has(q.id));
+            if (twin && !(meta.id && remoteById.has(meta.id))) {
+              matchedRemoteIds.add(twin.id);
+              await pushLocal({ adoptId: twin.id });
+              stats.uploaded++;
+              out.appendLine(
+                `sync: moved page id ${twin.id} "${twin.path}" -> "${remotePath}"`
+              );
+              continue;
+            }
             // The file carries an id whose page lives elsewhere on the server:
             // it was moved (rename the page, keep its id/history) or copied from
             // another page (stale id — make it a new page). Ask once; a reorg
             // can answer for everything with "…All".
             if (meta.id && remoteById.has(meta.id)) {
               const from = remoteById.get(meta.id)!;
-              const choice = isCaseOnlyMove(ctx, from.path, remotePath)
-                ? 'move'
-                : await moveResolver.resolve(
-                    relFilePath,
-                    meta.id,
-                    from.path,
-                    remotePath
-                  );
+              const choice =
+                isCaseOnlyMove(ctx, from.path, remotePath) ||
+                isLandingMove(from.path.toLowerCase(), remotePath.toLowerCase())
+                  ? 'move'
+                  : await moveResolver.resolve(
+                      relFilePath,
+                      meta.id,
+                      from.path,
+                      remotePath
+                    );
               if (choice === 'skip') {
                 stats.conflicts++;
                 out.appendLine(
@@ -1177,6 +1211,43 @@ async function syncFolder(
         } catch (err: any) {
           stats.failed++;
           out.appendLine(`sync: FAILED ${relFilePath}: ${err?.message ?? err}`);
+        }
+      }
+
+      // Mixed-case pages whose lowercase twin now exists on the server are stale
+      // duplicates (left by an earlier case change). Never download them over the
+      // twin's local file; offer to delete them, once, for the whole run.
+      const staleDupes = [...remoteByPath.values()].filter(
+        (p) =>
+          ctx.lowercasePaths &&
+          p.path !== p.path.toLowerCase() &&
+          !matchedRemoteIds.has(p.id) &&
+          remoteByPath.has(p.path.toLowerCase())
+      );
+      if (staleDupes.length > 0) {
+        const pick = await vscode.window.showWarningMessage(
+          `Wiki.js Sync: ${staleDupes.length} page(s) exist twice on the server, ` +
+            `once at a mixed-case path (e.g. "${staleDupes[0].path}") and once lowercase. ` +
+            `Delete the mixed-case duplicates? (Keep leaves them untouched.)`,
+          { modal: true },
+          'Delete',
+          'Keep'
+        );
+        for (const dupe of staleDupes) {
+          matchedRemoteIds.add(dupe.id); // never re-downloaded this run
+          if (pick !== 'Delete') continue;
+          try {
+            await deletePage(ctx.url, token, dupe.id);
+            stats.deleted++;
+            out.appendLine(
+              `sync: deleted duplicate page "${dupe.path}" (id ${dupe.id})`
+            );
+          } catch (err: any) {
+            stats.failed++;
+            out.appendLine(
+              `sync: FAILED to delete ${dupe.path}: ${err?.message ?? err}`
+            );
+          }
         }
       }
 

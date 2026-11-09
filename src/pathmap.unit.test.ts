@@ -227,3 +227,50 @@ describe('lowercasePaths', () => {
     );
   });
 });
+
+describe('landing pages (index.md / home.md)', () => {
+  const c = (files: string[] = []) => ({
+    root: '/w/docs',
+    wikiPath: '',
+    lowercasePaths: true,
+    exists: (p: string) => files.includes(p.replace(/\\/g, '/')),
+  });
+  it('maps nested index.md and home.md to the folder', () => {
+    expect(pagePathForFile(c(), '/w/docs/services/vpn/index.md')).toBe(
+      'services/vpn'
+    );
+    expect(pagePathForFile(c(), '/w/docs/services/vpn/home.md')).toBe(
+      'services/vpn'
+    );
+  });
+  it('home beats index when both exist; index keeps its own page', () => {
+    const x = c(['/w/docs/services/vpn/home.md']);
+    expect(pagePathForFile(x, '/w/docs/services/vpn/index.md')).toBe(
+      'services/vpn/index'
+    );
+    expect(pagePathForFile(x, '/w/docs/services/vpn/home.md')).toBe(
+      'services/vpn'
+    );
+  });
+  it('root landing files stay index/home without a wikiPath', () => {
+    expect(pagePathForFile(c(), '/w/docs/index.md')).toBe('index');
+    expect(pagePathForFile(c(), '/w/docs/home.md')).toBe('home');
+  });
+  it('fileForPagePath prefers home, then index, then folder, then flat', () => {
+    expect(
+      posix(
+        fileForPagePath(
+          c(['/w/docs/a/b/home.md', '/w/docs/a/b/index.md']),
+          'a/b'
+        )
+      )
+    ).toBe('/w/docs/a/b/home.md');
+    expect(posix(fileForPagePath(c(['/w/docs/a/b/index.md']), 'a/b'))).toBe(
+      '/w/docs/a/b/index.md'
+    );
+    expect(posix(fileForPagePath(c(['/w/docs/a/b']), 'a/b'))).toBe(
+      '/w/docs/a/b/index.md'
+    );
+    expect(posix(fileForPagePath(c(), 'a/b'))).toBe('/w/docs/a/b.md');
+  });
+});

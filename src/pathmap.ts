@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 
 // Pure path <-> wiki-page mapping and gitignore-style glob matching. No VS Code
@@ -10,6 +11,8 @@ export interface PathContext {
   wikiPath: string;
   /** Lowercase every page path (so it agrees with Wiki.js's lowercase asset folders). */
   lowercasePaths?: boolean;
+  /** File-existence probe (tests inject one). Default: `fs.existsSync`. */
+  exists?: (absPath: string) => boolean;
 }
 
 export interface MatchContext extends PathContext {
@@ -101,19 +104,40 @@ const guardFirstSegment = (p: string): string => {
 export const sanitizeWikiPath = (rawPath: string): string =>
   guardFirstSegment(sanitizeSegments(rawPath));
 
+// Folder landing pages. `<folder>/home.md` and `<folder>/index.md` both map to
+// the page at `<folder>` itself (so `/services/vpn` resolves). `home` wins when
+// both exist: `index.md` then keeps its own `<folder>/index` page.
+const LANDING_NAMES = ['home', 'index'];
+
+const existsIn = (ctx: PathContext, p: string): boolean =>
+  (ctx.exists ?? fs.existsSync)(p);
+
 /**
- * Wiki page path for a local `.md` file inside `ctx`. A top-level `index.md`
- * maps to the context's `wikiPath` itself (the "section landing page"). The
- * portion derived from the file's location is sanitized to a Wiki.js-legal form;
- * `ctx.wikiPath` is author-controlled and prepended as given (only the combined
- * first segment gets the reserved-word guard).
+ * Wiki page path for a local `.md` file inside `ctx`. `index.md` / `home.md`
+ * (home preferred) map to their folder's page; at the context root with a
+ * `wikiPath` that is `wikiPath` itself, with no `wikiPath` they stay `index` /
+ * `home`. The portion derived from the file's location is sanitized to a
+ * Wiki.js-legal form; `ctx.wikiPath` is author-controlled and prepended as
+ * given (only the combined first segment gets the reserved-word guard).
  */
 export const pagePathForFile = (ctx: PathContext, filePath: string): string => {
-  const relPosix = toPosix(
+  let relPosix = toPosix(
     path.relative(ctx.root, filePath).replace(/\.md$/i, '')
   );
-  if (relPosix === 'index' && ctx.wikiPath) {
-    return ctx.wikiPath;
+  const segs = relPosix.split('/');
+  const base = segs[segs.length - 1];
+  if (LANDING_NAMES.includes(base.toLowerCase())) {
+    const dir = segs.slice(0, -1).join('/');
+    const homeBeatsIndex =
+      base.toLowerCase() === 'index' &&
+      existsIn(ctx, path.join(ctx.root, ...segs.slice(0, -1), 'home.md'));
+    if (!homeBeatsIndex) {
+      if (dir === '') {
+        if (ctx.wikiPath) return ctx.wikiPath;
+      } else {
+        relPosix = dir;
+      }
+    }
   }
   const joined = [ctx.wikiPath, sanitizeSegments(relPosix)]
     .filter(Boolean)
@@ -122,8 +146,11 @@ export const pagePathForFile = (ctx: PathContext, filePath: string): string => {
 };
 
 /**
- * Local `.md` file path for a wiki page path, within `ctx`. A page at exactly
- * `ctx.wikiPath` lands in `index.md` at the context root.
+ * Local `.md` file path for a wiki page path, within `ctx`. Prefers an existing
+ * `<page>/home.md`, then `<page>/index.md`, then `<page>.md`; a page whose
+ * folder exists locally (and has no `<page>.md`) lands in `<page>/index.md`. The
+ * page at exactly `ctx.wikiPath` is the context root's `home.md` if present,
+ * else `index.md`.
  */
 export const fileForPagePath = (
   ctx: PathContext,
@@ -135,12 +162,21 @@ export const fileForPagePath = (
   let rel = pagePath;
   if (wikiPath) {
     if (pagePath === wikiPath) {
-      rel = 'index';
+      rel = '';
     } else if (pagePath.startsWith(`${wikiPath}/`)) {
       rel = pagePath.slice(wikiPath.length + 1);
     }
   }
-  return path.join(ctx.root, `${rel}.md`);
+  const dir = path.join(ctx.root, rel);
+  if (existsIn(ctx, path.join(dir, 'home.md')))
+    return path.join(dir, 'home.md');
+  if (existsIn(ctx, path.join(dir, 'index.md')))
+    return path.join(dir, 'index.md');
+  if (rel === '') return path.join(ctx.root, 'index.md');
+  const flat = `${dir}.md`;
+  if (!existsIn(ctx, flat) && existsIn(ctx, dir))
+    return path.join(dir, 'index.md');
+  return flat;
 };
 
 /**
