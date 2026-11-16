@@ -196,16 +196,19 @@ export const assetLinkForFile = (ctx: PathContext, filePath: string): string =>
     .join('/');
 
 /**
- * Wiki.js asset folders are addressed by slug and are lowercase-only, so folder
- * segments are slugified when created. Filenames are normalised by the server
- * too (see `serverAssetName`).
+ * Wiki.js asset folders are addressed by slug, stored lowercase. Probed against
+ * Wiki.js 2.5 (2026-11): `createFolder` + `POST /u` + serving accept `+ # ( ) ,`
+ * verbatim, so only what pages also reject is changed: `.` and whitespace ->
+ * `-`, the parsePath "unsafe" set dropped. Keeps asset folders equal to the page
+ * path so relative links work. Filenames are normalised separately
+ * (`serverAssetName`).
  */
 export const slugifyFolderSegment = (segment: string): string =>
   segment
     .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/-+/g, '-')
+    .replace(STRIP_IN_SEGMENT, '')
+    .replace(DASH_IN_SEGMENT, '-')
+    .replace(/-{2,}/g, '-')
     .replace(/^-|-$/g, '');
 
 /**

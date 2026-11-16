@@ -147,6 +147,13 @@ describe('assets', () => {
   it('slugifies folder segments', () => {
     expect(slugifyFolderSegment('Key Cloak.v2')).toBe('key-cloak-v2');
   });
+  it('keeps characters Wiki.js accepts in folder slugs (+ # ( ) ,)', () => {
+    expect(slugifyFolderSegment('Ticketing+Forgejo_git')).toBe(
+      'ticketing+forgejo_git'
+    );
+    expect(slugifyFolderSegment('a#b (c),d')).toBe('a#b-(c),d');
+    expect(slugifyFolderSegment('a:b*c')).toBe('abc');
+  });
 });
 
 describe('normalizeWikiPath', () => {

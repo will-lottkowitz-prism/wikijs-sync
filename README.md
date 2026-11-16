@@ -172,7 +172,7 @@ characters → `-`, case preserved), controlled by `wikijsSync.autoRenameIllegal
 — e.g. `Node.js Notes.md` → `Node-js-Notes.md` → page `…/Node-js-Notes`. Renaming
 doesn't fix `[links](/other/page.md)` in *other* files that point at the old name.
 
-**Asset folders are always lowercase** — Wiki.js only allows lowercase folder slugs, so `Docs/Images/a.png`
+**Asset folders are always lowercase** — Wiki.js stores folder slugs lowercase, and `.`/whitespace become `-` (other characters such as `+ # ( ) ,` are kept, matching page paths), so `Docs/Images/a.png`
 is served at `/docs/images/a.png` (Wiki.js also lowercases the filename and turns spaces into `_`). A page at `/Docs/Guide` then can't reach
 it with the relative link `images/a.png`. Turn on `wikijsSync.lowercasePaths` to put pages under
 lowercase paths too: on the next sync each local file is renamed to lowercase (per

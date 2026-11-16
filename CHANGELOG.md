@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Asset folder slugs now keep `+ # ( ) ,` (Wiki.js accepts them), so a folder like `ticketing+forgejo_git` matches its page path and relative asset links resolve. Previously every non `[a-z0-9_-]` char became `-`. Existing flattened asset folders on the server are orphaned on next sync; remove them in Admin > Assets.
+
+## 0.15.5 — 2026-11-17
+
+- Asset folder slugs keep + # ( ) , so asset folders match page paths
+
+
 ## 0.15.4 — 2026-11-10
 
 - Fixed handling of index.md and home.md links:
